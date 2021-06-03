@@ -4,7 +4,10 @@ use std::rc::Weak;
 use std::time::Instant;
 
 use objc2::rc::Retained;
-use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
+use objc2::runtime::AnyObject;
+use objc2::{
+    class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass,
+};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSRunningApplication,
 };
@@ -14,7 +17,7 @@ use super::event_handler::EventHandler;
 use super::event_loop::{stop_app_immediately, ActiveEventLoop, PanicInfo};
 use super::observer::{EventLoopWaker, RunLoop};
 use super::{menu, WindowId, DEVICE_ID};
-use crate::event::{DeviceEvent, Event, StartCause, WindowEvent};
+use crate::event::{DeviceEvent, Event, MacOS, PlatformSpecific, StartCause, WindowEvent};
 use crate::event_loop::{ActiveEventLoop as RootActiveEventLoop, ControlFlow};
 use crate::window::WindowId as RootWindowId;
 
@@ -44,6 +47,14 @@ pub(super) struct AppState {
     // as such should be careful to not add fields that, in turn, strongly reference those.
 }
 
+/// Apple constants
+#[allow(non_upper_case_globals)]
+pub const kInternetEventClass: u32 = 0x4755524c;
+#[allow(non_upper_case_globals)]
+pub const kAEGetURL: u32 = 0x4755524c;
+#[allow(non_upper_case_globals)]
+pub const keyDirectObject: u32 = 0x2d2d2d2d;
+
 declare_class!(
     #[derive(Debug)]
     pub(super) struct ApplicationDelegate;
@@ -64,6 +75,33 @@ declare_class!(
         #[method(applicationDidFinishLaunching:)]
         fn app_did_finish_launching(&self, notification: &NSNotification) {
             self.did_finish_launching(notification)
+        }
+
+        #[method(applicationWillFinishLaunching:)]
+        fn will_finish_launching(&self, _sender: Option<&AnyObject>) {
+            trace_scope!("applicationWillFinishLaunching");
+
+            unsafe {
+                let event_manager = class!(NSAppleEventManager);
+                let shared_manager: *mut AnyObject =
+                    msg_send![event_manager, sharedAppleEventManager];
+
+                let () = msg_send![shared_manager,
+                    setEventHandler: self
+                    andSelector: sel!(handleEvent:withReplyEvent:)
+                    forEventClass: kInternetEventClass
+                    andEventID: kAEGetURL
+                ];
+            }
+        }
+
+        #[method(handleEvent:withReplyEvent:)]
+        fn handle_url(&self, event: *mut AnyObject, _reply: u64) {
+            if let Some(string) = parse_url(event) {
+                self.handle_event(Event::PlatformSpecific(PlatformSpecific::MacOS(
+                    MacOS::ReceivedUrl(string),
+                )));
+            }
         }
 
         #[method(applicationWillTerminate:)]
@@ -440,4 +478,22 @@ fn window_activation_hack(app: &NSApplication) {
             tracing::trace!("Skipping activating invisible window");
         }
     })
+}
+
+fn parse_url(event: *mut AnyObject) -> Option<String> {
+    unsafe {
+        let class: u32 = msg_send![event, eventClass];
+        let id: u32 = msg_send![event, eventID];
+        if class != kInternetEventClass || id != kAEGetURL {
+            return None;
+        }
+        let subevent: *mut AnyObject = msg_send![event, paramDescriptorForKeyword: keyDirectObject];
+        let nsstring: *mut AnyObject = msg_send![subevent, stringValue];
+        let cstr: *const i8 = msg_send![nsstring, UTF8String];
+        if !cstr.is_null() {
+            Some(std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
 }

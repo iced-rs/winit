@@ -823,10 +823,13 @@ impl WindowDelegate {
 
         let suggested_size = content_size.to_physical(scale_factor);
         let new_inner_size = Arc::new(Mutex::new(suggested_size));
-        app_delegate.handle_window_event(window.id(), WindowEvent::ScaleFactorChanged {
-            scale_factor,
-            inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
-        });
+        app_delegate.handle_window_event(
+            window.id(),
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
+            },
+        );
         let physical_size = *new_inner_size.lock().unwrap();
         drop(new_inner_size);
 

@@ -20,7 +20,7 @@ use web_time::{Duration, Instant};
 
 use crate::application::ApplicationHandler;
 use crate::error::{EventLoopError, OsError};
-use crate::event::Event;
+use crate::event::{self, Event};
 use crate::monitor::MonitorHandle;
 use crate::platform_impl;
 use crate::window::{CustomCursor, CustomCursorSource, Theme, Window, WindowAttributes};
@@ -647,5 +647,8 @@ pub(crate) fn dispatch_event_for_app<T: 'static, A: ApplicationHandler<T>>(
         Event::AboutToWait => app.about_to_wait(event_loop),
         Event::LoopExiting => app.exiting(event_loop),
         Event::MemoryWarning => app.memory_warning(event_loop),
+        Event::PlatformSpecific(event::PlatformSpecific::MacOS(event::MacOS::ReceivedUrl(url))) => {
+            app.received_url(event_loop, url)
+        },
     }
 }
