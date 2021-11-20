@@ -14,6 +14,14 @@
 - On Wayland, bump `smithay-client-toolkit` to 0.15.
 - On Wayland, implement `request_user_attention` with `xdg_activation_v1`.
 - On X11, emit missing `WindowEvent::ScaleFactorChanged` when the only monitor gets reconnected.
+- On X11, if RANDR based scale factor is higher than 20 reset it to 1
+- On Wayland, add an enabled-by-default feature called `wayland-dlopen` so users can opt out of using `dlopen` to load system libraries.
+- **Breaking:** On Android, bump `ndk` and `ndk-glue` to 0.4.
+- On Windows, increase wait timer resolution for more accurate timing when using `WaitUntil`.
+- On macOS, fix native file dialogs hanging the event loop.
+- On Wayland, implement a workaround for wrong configure size when using `xdg_decoration` in `kwin_wayland`
+- On macOS, fix an issue that prevented the menu bar from showing in borderless fullscreen mode.
+- On X11, EINTR while polling for events no longer causes a panic. Instead it will be treated as a spurious wakeup.
 
 # 0.25.0 (2021-05-15)
 
