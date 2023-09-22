@@ -2538,7 +2538,9 @@ unsafe extern "system" fn thread_event_target_callback<T: 'static>(
                     }
                 }
             }
-            userdata.event_loop_runner.poll();
+            if !userdata.event_loop_runner.should_buffer() {
+                userdata.event_loop_runner.poll();
+            }
             0
         }
         _ => DefWindowProcW(window, msg, wparam, lparam),
