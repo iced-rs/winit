@@ -8,6 +8,8 @@ And please only add new entries to the top of this list, right below the `# Unre
 
 # Unreleased
 
+- On Windows, fix re-entrant event loop crash from rust-windowing/winit/issues/2291
+
 # 0.28.6
 
 - On macOS, fixed memory leak when getting monitor handle.
