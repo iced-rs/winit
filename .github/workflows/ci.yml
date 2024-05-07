@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, nightly, '1.70.0']
+        toolchain: [stable, '1.70.0']
         platform:
           # Note: Make sure that we test all the `docs.rs` targets defined in Cargo.toml!
           - { name: 'Windows 64bit MSVC', target: x86_64-pc-windows-msvc,   os: windows-latest,  }
