@@ -103,7 +103,7 @@ pub struct WindowId {
 
 impl WindowId {
     pub const fn dummy() -> Self {
-        WindowId { fd: u64::max_value() }
+        WindowId { fd: u64::MAX }
     }
 }
 
@@ -154,7 +154,7 @@ impl<'a> WindowProperties<'a> {
     }
 }
 
-impl<'a> fmt::Display for WindowProperties<'a> {
+impl fmt::Display for WindowProperties<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

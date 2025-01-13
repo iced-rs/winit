@@ -1,5 +1,3 @@
-#![cfg(android_platform)]
-
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -134,7 +132,7 @@ impl RedrawRequester {
 pub struct KeyEventExtra {}
 
 pub struct EventLoop<T: 'static> {
-    android_app: AndroidApp,
+    pub(crate) android_app: AndroidApp,
     window_target: event_loop::ActiveEventLoop,
     redraw_flag: SharedFlag,
     user_events_sender: mpsc::Sender<T>,
@@ -648,7 +646,7 @@ impl<T> EventLoopProxy<T> {
 }
 
 pub struct ActiveEventLoop {
-    app: AndroidApp,
+    pub(crate) app: AndroidApp,
     control_flow: Cell<ControlFlow>,
     exit: Cell<bool>,
     redraw_requester: RedrawRequester,
@@ -677,6 +675,11 @@ impl ActiveEventLoop {
     #[inline]
     pub fn raw_display_handle_rwh_05(&self) -> rwh_05::RawDisplayHandle {
         rwh_05::RawDisplayHandle::Android(rwh_05::AndroidDisplayHandle::empty())
+    }
+
+    #[inline]
+    pub fn system_theme(&self) -> Option<Theme> {
+        None
     }
 
     #[cfg(feature = "rwh_06")]
@@ -905,7 +908,13 @@ impl Window {
 
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
 
-    pub fn set_ime_allowed(&self, _allowed: bool) {}
+    pub fn set_ime_allowed(&self, allowed: bool) {
+        if allowed {
+            self.app.show_soft_input(true);
+        } else {
+            self.app.hide_soft_input(true);
+        }
+    }
 
     pub fn set_ime_purpose(&self, _purpose: ImePurpose) {}
 

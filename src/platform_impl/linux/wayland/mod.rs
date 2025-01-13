@@ -1,5 +1,3 @@
-#![cfg(wayland_platform)]
-
 //! Winit's Wayland backend.
 
 use std::fmt::Display;
@@ -68,7 +66,7 @@ impl From<WaylandError> for OsError {
 pub struct DeviceId;
 
 impl DeviceId {
-    pub const unsafe fn dummy() -> Self {
+    pub const fn dummy() -> Self {
         DeviceId
     }
 }

@@ -147,6 +147,8 @@ impl AppState {
         // must be mut because plain `static` requires `Sync`
         static mut APP_STATE: RefCell<Option<AppState>> = RefCell::new(None);
 
+        #[allow(unknown_lints)] // New lint below
+        #[allow(static_mut_refs)] // TODO: Use `MainThreadBound` instead.
         let mut guard = unsafe { APP_STATE.borrow_mut() };
         if guard.is_none() {
             #[inline(never)]
@@ -798,7 +800,7 @@ impl EventLoopWaker {
             // future, but that gets changed to fire immediately in did_finish_launching
             let timer = CFRunLoopTimerCreate(
                 ptr::null_mut(),
-                std::f64::MAX,
+                f64::MAX,
                 0.000_000_1,
                 0,
                 0,
@@ -812,11 +814,11 @@ impl EventLoopWaker {
     }
 
     fn stop(&mut self) {
-        unsafe { CFRunLoopTimerSetNextFireDate(self.timer, std::f64::MAX) }
+        unsafe { CFRunLoopTimerSetNextFireDate(self.timer, f64::MAX) }
     }
 
     fn start(&mut self) {
-        unsafe { CFRunLoopTimerSetNextFireDate(self.timer, std::f64::MIN) }
+        unsafe { CFRunLoopTimerSetNextFireDate(self.timer, f64::MIN) }
     }
 
     fn start_at(&mut self, instant: Instant) {

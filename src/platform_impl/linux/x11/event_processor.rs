@@ -129,6 +129,7 @@ impl EventProcessor {
     /// Specifically, this involves all of the KeyPress events in compose/pre-edit sequences,
     /// along with an extra copy of the KeyRelease events. This also prevents backspace and
     /// arrow keys from being detected twice.
+    #[must_use]
     fn filter_event(&mut self, xev: &mut XEvent) -> bool {
         let wt = Self::window_target(&self.target);
         unsafe {
@@ -145,8 +146,20 @@ impl EventProcessor {
     {
         let event_type = xev.get_type();
 
-        if self.filter_event(xev) {
-            if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
+        // If we have IME disabled, don't try to `filter_event`, since only IME can consume them
+        // and forward back. This is not desired for e.g. games since some IMEs may delay the input
+        // and game can toggle IME back when e.g. typing into some field where latency won't really
+        // matter.
+        let filtered = if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
+            let wt = Self::window_target(&self.target);
+            let ime = wt.ime.as_ref();
+            let window = self.active_window.map(|window| window as XWindow);
+            let forward_to_ime = ime
+                .and_then(|ime| window.map(|window| ime.borrow().is_ime_allowed(window)))
+                .unwrap_or(false);
+
+            let filtered = forward_to_ime && self.filter_event(xev);
+            if filtered {
                 let xev: &XKeyEvent = xev.as_ref();
                 if self.xmodmap.is_modifier(xev.keycode as u8) {
                     // Don't grow the buffer past the `MAX_MOD_REPLAY_LEN`. This could happen
@@ -159,6 +172,14 @@ impl EventProcessor {
                     self.xfiltered_modifiers.push_front(xev.serial);
                 }
             }
+
+            filtered
+        } else {
+            self.filter_event(xev)
+        };
+
+        // Don't process event if it was filtered.
+        if filtered {
             return;
         }
 
@@ -434,7 +455,7 @@ impl EventProcessor {
             let flags = xev.data.get_long(1);
             let version = flags >> 24;
             self.dnd.version = Some(version);
-            let has_more_types = flags - (flags & (c_long::max_value() - 1)) == 1;
+            let has_more_types = flags - (flags & (c_long::MAX - 1)) == 1;
             if !has_more_types {
                 let type_list = vec![
                     xev.data.get_long(2) as xproto::Atom,

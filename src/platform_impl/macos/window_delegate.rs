@@ -1,6 +1,8 @@
 #![allow(clippy::unnecessary_cast)]
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ffi::c_void;
+use std::ptr;
 use std::sync::{Arc, Mutex};
 
 use core_graphics::display::{CGDisplay, CGPoint};
@@ -9,18 +11,20 @@ use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSAppKitVersionNumber, NSAppKitVersionNumber10_12, NSAppearance, NSApplication,
-    NSApplicationPresentationOptions, NSBackingStoreType, NSDraggingDestination,
-    NSFilenamesPboardType, NSPasteboard, NSRequestUserAttentionType, NSScreen, NSView,
-    NSWindowButton, NSWindowDelegate, NSWindowFullScreenButton, NSWindowLevel,
-    NSWindowOcclusionState, NSWindowOrderingMode, NSWindowSharingType, NSWindowStyleMask,
-    NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSAppKitVersionNumber, NSAppKitVersionNumber10_12, NSAppearance, NSAppearanceCustomization,
+    NSAppearanceNameAqua, NSApplication, NSApplicationPresentationOptions, NSBackingStoreType,
+    NSColor, NSDraggingDestination, NSFilenamesPboardType, NSPasteboard,
+    NSRequestUserAttentionType, NSScreen, NSView, NSWindowButton, NSWindowDelegate,
+    NSWindowFullScreenButton, NSWindowLevel, NSWindowOcclusionState, NSWindowOrderingMode,
+    NSWindowSharingType, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
-    ns_string, CGFloat, MainThreadMarker, NSArray, NSCopying, NSDistributedNotificationCenter,
-    NSObject, NSObjectNSDelayedPerforming, NSObjectNSThreadPerformAdditions, NSObjectProtocol,
-    NSPoint, NSRect, NSSize, NSString,
+    ns_string, CGFloat, MainThreadMarker, NSArray, NSCopying, NSDictionary, NSKeyValueChangeKey,
+    NSKeyValueChangeNewKey, NSKeyValueChangeOldKey, NSKeyValueObservingOptions, NSObject,
+    NSObjectNSDelayedPerforming, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString,
 };
+use tracing::{trace, warn};
 
 use super::app_state::ApplicationDelegate;
 use super::cursor::cursor_from_icon;
@@ -51,6 +55,7 @@ pub struct PlatformSpecificWindowAttributes {
     pub accepts_first_mouse: bool,
     pub tabbing_identifier: Option<String>,
     pub option_as_alt: OptionAsAlt,
+    pub borderless_game: bool,
 }
 
 impl Default for PlatformSpecificWindowAttributes {
@@ -68,6 +73,7 @@ impl Default for PlatformSpecificWindowAttributes {
             accepts_first_mouse: true,
             tabbing_identifier: None,
             option_as_alt: Default::default(),
+            borderless_game: false,
         }
     }
 }
@@ -79,12 +85,10 @@ pub(crate) struct State {
 
     window: Retained<WinitWindow>,
 
-    current_theme: Cell<Option<Theme>>,
-
     // During `windowDidResize`, we use this to only send Moved if the position changed.
     //
-    // This is expressed in native screen coordinates.
-    previous_position: Cell<Option<NSPoint>>,
+    // This is expressed in desktop coordinates, and flipped to match Winit's coordinate system.
+    previous_position: Cell<NSPoint>,
 
     // Used to prevent redundant events.
     previous_scale_factor: Cell<f64>,
@@ -118,6 +122,7 @@ pub(crate) struct State {
     standard_frame: Cell<Option<NSRect>>,
     is_simple_fullscreen: Cell<bool>,
     saved_style: Cell<Option<NSWindowStyleMask>>,
+    is_borderless_game: Cell<bool>,
 }
 
 declare_class!(
@@ -419,31 +424,65 @@ declare_class!(
         }
     }
 
+    // Key-Value Observing
     unsafe impl WindowDelegate {
-        // Observe theme change
-        #[method(effectiveAppearanceDidChange:)]
-        fn effective_appearance_did_change(&self, sender: Option<&AnyObject>) {
-            trace_scope!("effectiveAppearanceDidChange:");
-            unsafe {
-                self.performSelectorOnMainThread_withObject_waitUntilDone(
-                    sel!(effectiveAppearanceDidChangedOnMainThread:),
-                    sender,
-                    false,
-                )
-            };
-        }
+        #[method(observeValueForKeyPath:ofObject:change:context:)]
+        fn observe_value(
+            &self,
+            key_path: Option<&NSString>,
+            _object: Option<&AnyObject>,
+            change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
+            _context: *mut c_void,
+        ) {
+            trace_scope!("observeValueForKeyPath:ofObject:change:context:");
+            // NOTE: We don't _really_ need to check the key path, as there should only be one, but
+            // in the future we might want to observe other key paths.
+            if key_path == Some(ns_string!("effectiveAppearance")) {
+                let change = change.expect("requested a change dictionary in `addObserver`, but none was provided");
+                let old = change.get(unsafe { NSKeyValueChangeOldKey }).expect("requested change dictionary did not contain `NSKeyValueChangeOldKey`");
+                let new = change.get(unsafe { NSKeyValueChangeNewKey }).expect("requested change dictionary did not contain `NSKeyValueChangeNewKey`");
 
-        #[method(effectiveAppearanceDidChangedOnMainThread:)]
-        fn effective_appearance_did_changed_on_main_thread(&self, _: Option<&AnyObject>) {
-            let mtm = MainThreadMarker::from(self);
-            let theme = get_ns_theme(mtm);
-            let old_theme = self.ivars().current_theme.replace(Some(theme));
-            if old_theme != Some(theme) {
-                self.queue_event(WindowEvent::ThemeChanged(theme));
+                // SAFETY: The value of `effectiveAppearance` is `NSAppearance`
+                let old: *const AnyObject = old;
+                let old: *const NSAppearance = old.cast();
+                let old: &NSAppearance = unsafe { &*old };
+                let new: *const AnyObject = new;
+                let new: *const NSAppearance = new.cast();
+                let new: &NSAppearance = unsafe { &*new };
+
+                trace!(old = %unsafe { old.name() }, new = %unsafe { new.name() }, "effectiveAppearance changed");
+
+                // Ignore the change if the window's theme is customized by the user (since in that
+                // case the `effectiveAppearance` is only emitted upon said customization, and then
+                // it's triggered directly by a user action, and we don't want to emit the event).
+                if unsafe { self.window().appearance() }.is_some() {
+                    return;
+                }
+
+                let old = appearance_to_theme(old);
+                let new = appearance_to_theme(new);
+                // Check that the theme changed in Winit's terms (the theme might have changed on
+                // other parameters, such as level of contrast, but the event should not be emitted
+                // in those cases).
+                if old == new {
+                    return;
+                }
+
+                self.queue_event(WindowEvent::ThemeChanged(new));
+            } else {
+                panic!("unknown observed keypath {key_path:?}");
             }
         }
     }
 );
+
+impl Drop for WindowDelegate {
+    fn drop(&mut self) {
+        unsafe {
+            self.window().removeObserver_forKeyPath(self, ns_string!("effectiveAppearance"));
+        }
+    }
+}
 
 fn new_window(
     app_delegate: &ApplicationDelegate,
@@ -613,6 +652,8 @@ fn new_window(
 
         if attrs.transparent {
             window.setOpaque(false);
+            // See `set_transparent` for details on why we do this.
+            window.setBackgroundColor(unsafe { Some(&NSColor::clearColor()) });
         }
 
         // register for drag and drop operations.
@@ -666,16 +707,14 @@ impl WindowDelegate {
 
         let scale_factor = window.backingScaleFactor() as _;
 
-        let current_theme = match attrs.preferred_theme {
-            Some(theme) => Some(theme),
-            None => Some(get_ns_theme(mtm)),
-        };
+        if let Some(appearance) = theme_to_appearance(attrs.preferred_theme) {
+            unsafe { window.setAppearance(Some(&appearance)) };
+        }
 
         let delegate = mtm.alloc().set_ivars(State {
             app_delegate: app_delegate.retain(),
             window: window.retain(),
-            current_theme: Cell::new(current_theme),
-            previous_position: Cell::new(None),
+            previous_position: Cell::new(flip_window_screen_coordinates(window.frame())),
             previous_scale_factor: Cell::new(scale_factor),
             resize_increments: Cell::new(resize_increments),
             decorations: Cell::new(attrs.decorations),
@@ -689,6 +728,7 @@ impl WindowDelegate {
             standard_frame: Cell::new(None),
             is_simple_fullscreen: Cell::new(false),
             saved_style: Cell::new(None),
+            is_borderless_game: Cell::new(attrs.platform_specific.borderless_game),
         });
         let delegate: Retained<WindowDelegate> = unsafe { msg_send_id![super(delegate), init] };
 
@@ -700,14 +740,16 @@ impl WindowDelegate {
         }
         window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
-        // Enable theme change event
-        let notification_center = unsafe { NSDistributedNotificationCenter::defaultCenter() };
+        // Listen for theme change event.
+        //
+        // SAFETY: The observer is un-registered in the `Drop` of the delegate.
         unsafe {
-            notification_center.addObserver_selector_name_object(
+            window.addObserver_forKeyPath_options_context(
                 &delegate,
-                sel!(effectiveAppearanceDidChange:),
-                Some(ns_string!("AppleInterfaceThemeChangedNotification")),
-                None,
+                ns_string!("effectiveAppearance"),
+                NSKeyValueObservingOptions::NSKeyValueObservingOptionNew
+                    | NSKeyValueObservingOptions::NSKeyValueObservingOptionOld,
+                ptr::null_mut(),
             )
         };
 
@@ -800,13 +842,12 @@ impl WindowDelegate {
     }
 
     fn emit_move_event(&self) {
-        let frame = self.window().frame();
-        if self.ivars().previous_position.get() == Some(frame.origin) {
+        let position = flip_window_screen_coordinates(self.window().frame());
+        if self.ivars().previous_position.get() == position {
             return;
         }
-        self.ivars().previous_position.set(Some(frame.origin));
+        self.ivars().previous_position.set(position);
 
-        let position = flip_window_screen_coordinates(frame);
         let position =
             LogicalPosition::new(position.x, position.y).to_physical(self.scale_factor());
         self.queue_event(WindowEvent::Moved(position));
@@ -824,7 +865,23 @@ impl WindowDelegate {
     }
 
     pub fn set_transparent(&self, transparent: bool) {
-        self.window().setOpaque(!transparent)
+        // This is just a hint for Quartz, it doesn't actually speculate with window alpha.
+        // Providing a wrong value here could result in visual artifacts, when the window is
+        // transparent.
+        self.window().setOpaque(!transparent);
+
+        // AppKit draws the window with a background color by default, which is usually really
+        // nice, but gets in the way when we want to allow the contents of the window to be
+        // transparent, as in that case, the transparent contents will just be drawn on top of
+        // the background color. As such, to allow the window to be transparent, we must also set
+        // the background color to one with an empty alpha channel.
+        let color = if transparent {
+            unsafe { NSColor::clearColor() }
+        } else {
+            unsafe { NSColor::windowBackgroundColor() }
+        };
+
+        self.window().setBackgroundColor(Some(&color));
     }
 
     pub fn set_blur(&self, blur: bool) {
@@ -923,8 +980,8 @@ impl WindowDelegate {
 
     pub fn set_max_inner_size(&self, dimensions: Option<Size>) {
         let dimensions = dimensions.unwrap_or(Size::Logical(LogicalSize {
-            width: std::f32::MAX as f64,
-            height: std::f32::MAX as f64,
+            width: f32::MAX as f64,
+            height: f32::MAX as f64,
         }));
         let scale_factor = self.scale_factor();
         let max_size = dimensions.to_logical::<CGFloat>(scale_factor);
@@ -1109,7 +1166,8 @@ impl WindowDelegate {
     #[inline]
     pub fn drag_window(&self) -> Result<(), ExternalError> {
         let mtm = MainThreadMarker::from(self);
-        let event = NSApplication::sharedApplication(mtm).currentEvent().unwrap();
+        let event =
+            NSApplication::sharedApplication(mtm).currentEvent().ok_or(ExternalError::Ignored)?;
         self.window().performWindowDragWithEvent(&event);
         Ok(())
     }
@@ -1358,7 +1416,7 @@ impl WindowDelegate {
         }
 
         match (old_fullscreen, fullscreen) {
-            (None, Some(_)) => {
+            (None, Some(fullscreen)) => {
                 // `toggleFullScreen` doesn't work if the `StyleMask` is none, so we
                 // set a normal style temporarily. The previous state will be
                 // restored in `WindowDelegate::window_did_exit_fullscreen`.
@@ -1368,6 +1426,17 @@ impl WindowDelegate {
                     self.set_style_mask(required);
                     self.ivars().saved_style.set(Some(curr_mask));
                 }
+
+                // In borderless games, we want to disable the dock and menu bar
+                // by setting the presentation options. We do this here rather than in
+                // `window:willUseFullScreenPresentationOptions` because for some reason
+                // the menu bar remains interactable despite being hidden.
+                if self.is_borderless_game() && matches!(fullscreen, Fullscreen::Borderless(_)) {
+                    let presentation_options = NSApplicationPresentationOptions::NSApplicationPresentationHideDock
+                            | NSApplicationPresentationOptions::NSApplicationPresentationHideMenuBar;
+                    app.setPresentationOptions(presentation_options);
+                }
+
                 toggle_fullscreen(self.window());
             },
             (Some(Fullscreen::Borderless(_)), None) => {
@@ -1375,13 +1444,7 @@ impl WindowDelegate {
                 toggle_fullscreen(self.window());
             },
             (Some(Fullscreen::Exclusive(ref video_mode)), None) => {
-                unsafe {
-                    ffi::CGRestorePermanentDisplayConfiguration();
-                    assert_eq!(
-                        ffi::CGDisplayRelease(video_mode.monitor().native_identifier()),
-                        ffi::kCGErrorSuccess
-                    );
-                };
+                restore_and_release_display(&video_mode.monitor());
                 toggle_fullscreen(self.window());
             },
             (Some(Fullscreen::Borderless(_)), Some(Fullscreen::Exclusive(_))) => {
@@ -1412,13 +1475,7 @@ impl WindowDelegate {
                 );
                 app.setPresentationOptions(presentation_options);
 
-                unsafe {
-                    ffi::CGRestorePermanentDisplayConfiguration();
-                    assert_eq!(
-                        ffi::CGDisplayRelease(video_mode.monitor().native_identifier()),
-                        ffi::kCGErrorSuccess
-                    );
-                };
+                restore_and_release_display(&video_mode.monitor());
 
                 // Restore the normal window level following the Borderless fullscreen
                 // `CGShieldingWindowLevel() + 1` hack.
@@ -1562,7 +1619,7 @@ impl WindowDelegate {
     pub fn raw_window_handle_rwh_04(&self) -> rwh_04::RawWindowHandle {
         let mut window_handle = rwh_04::AppKitHandle::empty();
         window_handle.ns_window = self.window() as *const WinitWindow as *mut _;
-        window_handle.ns_view = Retained::as_ptr(&self.contentView().unwrap()) as *mut _;
+        window_handle.ns_view = Retained::as_ptr(&self.view()) as *mut _;
         rwh_04::RawWindowHandle::AppKit(window_handle)
     }
 
@@ -1601,19 +1658,27 @@ impl WindowDelegate {
     }
 
     #[inline]
-    pub fn theme(&self) -> Option<Theme> {
-        self.ivars().current_theme.get()
-    }
-
-    #[inline]
     pub fn has_focus(&self) -> bool {
         self.window().isKeyWindow()
     }
 
+    pub fn theme(&self) -> Option<Theme> {
+        unsafe { self.window().appearance() }
+            .map(|appearance| appearance_to_theme(&appearance))
+            .or_else(|| {
+                let mtm = MainThreadMarker::from(self);
+                let app = NSApplication::sharedApplication(mtm);
+
+                if app.respondsToSelector(sel!(effectiveAppearance)) {
+                    Some(super::window_delegate::appearance_to_theme(&app.effectiveAppearance()))
+                } else {
+                    Some(Theme::Light)
+                }
+            })
+    }
+
     pub fn set_theme(&self, theme: Option<Theme>) {
-        let mtm = MainThreadMarker::from(self);
-        set_ns_theme(theme, mtm);
-        self.ivars().current_theme.set(theme.or_else(|| Some(get_ns_theme(mtm))));
+        unsafe { self.window().setAppearance(theme_to_appearance(theme).as_deref()) };
     }
 
     #[inline]
@@ -1631,6 +1696,21 @@ impl WindowDelegate {
 
     pub fn reset_dead_keys(&self) {
         // (Artur) I couldn't find a way to implement this.
+    }
+}
+
+fn restore_and_release_display(monitor: &MonitorHandle) {
+    let available_monitors = monitor::available_monitors();
+    if available_monitors.contains(monitor) {
+        unsafe {
+            ffi::CGRestorePermanentDisplayConfiguration();
+            assert_eq!(ffi::CGDisplayRelease(monitor.native_identifier()), ffi::kCGErrorSuccess);
+        };
+    } else {
+        warn!(
+            monitor = monitor.name(),
+            "Tried to restore exclusive fullscreen on a monitor that is no longer available"
+        );
     }
 }
 
@@ -1767,39 +1847,52 @@ impl WindowExtMacOS for WindowDelegate {
     fn option_as_alt(&self) -> OptionAsAlt {
         self.view().option_as_alt()
     }
+
+    fn set_borderless_game(&self, borderless_game: bool) {
+        self.ivars().is_borderless_game.set(borderless_game);
+    }
+
+    fn is_borderless_game(&self) -> bool {
+        self.ivars().is_borderless_game.get()
+    }
 }
 
 const DEFAULT_STANDARD_FRAME: NSRect =
     NSRect::new(NSPoint::new(50.0, 50.0), NSSize::new(800.0, 600.0));
 
-pub(super) fn get_ns_theme(mtm: MainThreadMarker) -> Theme {
-    let app = NSApplication::sharedApplication(mtm);
-    if !app.respondsToSelector(sel!(effectiveAppearance)) {
-        return Theme::Light;
-    }
-    let appearance = app.effectiveAppearance();
-    let name = appearance
-        .bestMatchFromAppearancesWithNames(&NSArray::from_id_slice(&[
-            NSString::from_str("NSAppearanceNameAqua"),
-            NSString::from_str("NSAppearanceNameDarkAqua"),
-        ]))
-        .unwrap();
-    match &*name.to_string() {
-        "NSAppearanceNameDarkAqua" => Theme::Dark,
-        _ => Theme::Light,
+fn dark_appearance_name() -> &'static NSString {
+    // Don't use the static `NSAppearanceNameDarkAqua` to allow linking on macOS < 10.14
+    ns_string!("NSAppearanceNameDarkAqua")
+}
+
+pub fn appearance_to_theme(appearance: &NSAppearance) -> Theme {
+    let best_match = appearance.bestMatchFromAppearancesWithNames(&NSArray::from_id_slice(&[
+        unsafe { NSAppearanceNameAqua.copy() },
+        dark_appearance_name().copy(),
+    ]));
+    if let Some(best_match) = best_match {
+        if *best_match == *dark_appearance_name() {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
+    } else {
+        warn!(?appearance, "failed to determine the theme of the appearance");
+        // Default to light in this case
+        Theme::Light
     }
 }
 
-fn set_ns_theme(theme: Option<Theme>, mtm: MainThreadMarker) {
-    let app = NSApplication::sharedApplication(mtm);
-    if app.respondsToSelector(sel!(effectiveAppearance)) {
-        let appearance = theme.map(|t| {
-            let name = match t {
-                Theme::Dark => NSString::from_str("NSAppearanceNameDarkAqua"),
-                Theme::Light => NSString::from_str("NSAppearanceNameAqua"),
-            };
-            NSAppearance::appearanceNamed(&name).unwrap()
-        });
-        app.setAppearance(appearance.as_ref().map(|a| a.as_ref()));
+fn theme_to_appearance(theme: Option<Theme>) -> Option<Retained<NSAppearance>> {
+    let appearance = match theme? {
+        Theme::Light => unsafe { NSAppearance::appearanceNamed(NSAppearanceNameAqua) },
+        Theme::Dark => NSAppearance::appearanceNamed(dark_appearance_name()),
+    };
+    if let Some(appearance) = appearance {
+        Some(appearance)
+    } else {
+        warn!(?theme, "could not find appearance for theme");
+        // Assume system appearance in this case
+        None
     }
 }
