@@ -117,6 +117,8 @@ pub(crate) static X11_BACKEND: Lazy<Mutex<Result<Arc<XConnection>, XNotSupported
 pub enum OsError {
     Misc(&'static str),
     #[cfg(x11_platform)]
+    XNotSupported(XNotSupported),
+    #[cfg(x11_platform)]
     XError(Arc<X11Error>),
     #[cfg(wayland_platform)]
     WaylandError(Arc<wayland::WaylandError>),
@@ -126,6 +128,8 @@ impl fmt::Display for OsError {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match *self {
             OsError::Misc(e) => _f.pad(e),
+            #[cfg(x11_platform)]
+            OsError::XNotSupported(ref e) => fmt::Display::fmt(e, _f),
             #[cfg(x11_platform)]
             OsError::XError(ref e) => fmt::Display::fmt(e, _f),
             #[cfg(wayland_platform)]
@@ -157,7 +161,7 @@ impl From<u64> for WindowId {
 }
 
 impl WindowId {
-    pub const unsafe fn dummy() -> Self {
+    pub const fn dummy() -> Self {
         Self(0)
     }
 }
@@ -171,11 +175,11 @@ pub enum DeviceId {
 }
 
 impl DeviceId {
-    pub const unsafe fn dummy() -> Self {
+    pub const fn dummy() -> Self {
         #[cfg(wayland_platform)]
-        return DeviceId::Wayland(unsafe { wayland::DeviceId::dummy() });
+        return DeviceId::Wayland(wayland::DeviceId::dummy());
         #[cfg(all(not(wayland_platform), x11_platform))]
-        return DeviceId::X(unsafe { x11::DeviceId::dummy() });
+        return DeviceId::X(x11::DeviceId::dummy());
     }
 }
 
@@ -643,18 +647,18 @@ pub(crate) enum PlatformCustomCursor {
 
 /// Hooks for X11 errors.
 #[cfg(x11_platform)]
-pub(crate) static mut XLIB_ERROR_HOOKS: Mutex<Vec<XlibErrorHook>> = Mutex::new(Vec::new());
+pub(crate) static XLIB_ERROR_HOOKS: Mutex<Vec<XlibErrorHook>> = Mutex::new(Vec::new());
 
 #[cfg(x11_platform)]
 unsafe extern "C" fn x_error_callback(
     display: *mut x11::ffi::Display,
     event: *mut x11::ffi::XErrorEvent,
 ) -> c_int {
-    let xconn_lock = X11_BACKEND.lock().unwrap();
+    let xconn_lock = X11_BACKEND.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(ref xconn) = *xconn_lock {
         // Call all the hooks.
         let mut error_handled = false;
-        for hook in unsafe { XLIB_ERROR_HOOKS.lock() }.unwrap().iter() {
+        for hook in XLIB_ERROR_HOOKS.lock().unwrap().iter() {
             error_handled |= hook(display as *mut _, event as *mut _);
         }
 
@@ -777,9 +781,11 @@ impl<T: 'static> EventLoop<T> {
 
     #[cfg(x11_platform)]
     fn new_x11_any_thread() -> Result<EventLoop<T>, EventLoopError> {
-        let xconn = match X11_BACKEND.lock().unwrap().as_ref() {
+        let xconn = match X11_BACKEND.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             Ok(xconn) => xconn.clone(),
-            Err(_) => return Err(EventLoopError::NotSupported(NotSupportedError::new())),
+            Err(err) => {
+                return Err(EventLoopError::Os(os_error!(OsError::XNotSupported(err.clone()))))
+            },
         };
 
         Ok(EventLoop::X(x11::EventLoop::new(xconn)))
@@ -895,6 +901,11 @@ impl ActiveEventLoop {
     #[inline]
     pub fn raw_display_handle_rwh_05(&self) -> rwh_05::RawDisplayHandle {
         x11_or_wayland!(match self; Self(evlp) => evlp.raw_display_handle_rwh_05())
+    }
+
+    #[inline]
+    pub fn system_theme(&self) -> Option<Theme> {
+        None
     }
 
     #[cfg(feature = "rwh_06")]

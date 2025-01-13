@@ -324,7 +324,11 @@ impl Inner {
             match &self.cursor {
                 SelectedCursor::Icon(icon)
                 | SelectedCursor::Loading { previous: Previous::Icon(icon), .. } => {
-                    self.style.set("cursor", icon.name())
+                    if let CursorIcon::Default = icon {
+                        self.style.remove("cursor")
+                    } else {
+                        self.style.set("cursor", icon.name())
+                    }
                 },
                 SelectedCursor::Loading { previous: Previous::Image(cursor), .. }
                 | SelectedCursor::Image(cursor) => {
@@ -538,8 +542,8 @@ fn from_rgba(
     //
     // We call `createImageBitmap()` before spawning the future,
     // to not have to clone the image buffer.
-    let mut options = ImageBitmapOptions::new();
-    options.premultiply_alpha(PremultiplyAlpha::None);
+    let options = ImageBitmapOptions::new();
+    options.set_premultiply_alpha(PremultiplyAlpha::None);
     let bitmap = JsFuture::from(
         window
             .create_image_bitmap_with_image_data_and_image_bitmap_options(&image_data, &options)

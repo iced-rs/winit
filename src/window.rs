@@ -71,16 +71,13 @@ pub struct WindowId(pub(crate) platform_impl::WindowId);
 impl WindowId {
     /// Returns a dummy id, useful for unit testing.
     ///
-    /// # Safety
+    /// # Notes
     ///
     /// The only guarantee made about the return value of this function is that
     /// it will always be equal to itself and to future values returned by this function.
     /// No other guarantees are made. This may be equal to a real [`WindowId`].
-    ///
-    /// **Passing this into a winit function will result in undefined behavior.**
-    pub const unsafe fn dummy() -> Self {
-        #[allow(unused_unsafe)]
-        WindowId(unsafe { platform_impl::WindowId::dummy() })
+    pub const fn dummy() -> Self {
+        WindowId(platform_impl::WindowId::dummy())
     }
 }
 
@@ -393,7 +390,6 @@ impl WindowAttributes {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** This is an app-wide setting.
     /// - **Wayland:** This controls only CSD. When using `None` it'll try to use dbus to get the
     ///   system preference. When explicit theme is used, this will avoid dbus all together.
     /// - **x11:** Build window with `_GTK_THEME_VARIANT` hint set to `dark` or `light`.
@@ -421,8 +417,8 @@ impl WindowAttributes {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS**: if `false`, [`NSWindowSharingNone`] is used but doesn't completely
-    /// prevent all apps from reading the window content, for instance, QuickTime.
+    /// - **macOS**: if `false`, [`NSWindowSharingNone`] is used but doesn't completely prevent all
+    ///   apps from reading the window content, for instance, QuickTime.
     /// - **iOS / Android / Web / x11 / Orbital:** Ignored.
     ///
     /// [`NSWindowSharingNone`]: https://developer.apple.com/documentation/appkit/nswindowsharingtype/nswindowsharingnone
@@ -470,8 +466,8 @@ impl WindowAttributes {
     /// ## Platform-specific
     ///
     /// - **Windows** : A child window has the WS_CHILD style and is confined
-    /// to the client area of its parent window. For more information, see
-    /// <https://docs.microsoft.com/en-us/windows/win32/winmsg/window-features#child-windows>
+    ///   to the client area of its parent window. For more information, see
+    ///   <https://docs.microsoft.com/en-us/windows/win32/winmsg/window-features#child-windows>
     /// - **X11**: A child window is confined to the client area of its parent window.
     /// - **Android / iOS / Wayland / Web:** Unsupported.
     #[cfg(feature = "rwh_06")]
@@ -534,9 +530,9 @@ impl Window {
     ///     provided by XRandR.
     ///
     ///   If `WINIT_X11_SCALE_FACTOR` is set to `randr`, it'll ignore the `Xft.dpi` field and use
-    /// the   XRandR scaling method. Generally speaking, you should try to configure the
-    /// standard system   variables to do what you want before resorting to
-    /// `WINIT_X11_SCALE_FACTOR`.
+    ///   the   XRandR scaling method. Generally speaking, you should try to configure the
+    ///   standard system   variables to do what you want before resorting to
+    ///   `WINIT_X11_SCALE_FACTOR`.
     /// - **Wayland:** The scale factor is suggested by the compositor for each window individually
     ///   by using the wp-fractional-scale protocol if available. Falls back to integer-scale
     ///   factors otherwise.
@@ -942,8 +938,7 @@ impl Window {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** If you're not drawing to the window yourself, you might have to set the
-    ///   background color of the window to enable transparency.
+    /// - **macOS:** This will reset the window's background color.
     /// - **Web / iOS / Android:** Unsupported.
     /// - **X11:** Can only be set while building the window, with
     ///   [`WindowAttributes::with_transparent`].
@@ -1279,7 +1274,8 @@ impl Window {
     ///
     /// - **macOS:** IME must be enabled to receive text-input where dead-key sequences are
     ///   combined.
-    /// - **iOS / Android / Web / Orbital:** Unsupported.
+    /// - **iOS / Android:** This will show / hide the soft keyboard.
+    /// - **Web / Orbital:** Unsupported.
     /// - **X11**: Enabling IME will disable dead keys reporting during compose.
     ///
     /// [`Ime`]: crate::event::WindowEvent::Ime
@@ -1355,11 +1351,12 @@ impl Window {
         self.window.maybe_queue_on_main(move |w| w.request_user_attention(request_type))
     }
 
-    /// Sets the current window theme. Use `None` to fallback to system default.
+    /// Set or override the window theme.
+    ///
+    /// Specify `None` to reset the theme to the system default.
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** This is an app-wide setting.
     /// - **Wayland:** Sets the theme for the client side decorations. Using `None` will use dbus to
     ///   get the system preference.
     /// - **X11:** Sets `_GTK_THEME_VARIANT` hint to `dark` or `light` and if `None` is used, it
@@ -1377,10 +1374,12 @@ impl Window {
 
     /// Returns the current window theme.
     ///
+    /// Returns `None` if it cannot be determined on the current platform.
+    ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** This is an app-wide setting.
-    /// - **iOS / Android / Wayland / x11 / Orbital:** Unsupported.
+    /// - **iOS / Android / x11 / Orbital:** Unsupported.
+    /// - **Wayland:** Only returns theme overrides.
     #[inline]
     pub fn theme(&self) -> Option<Theme> {
         let _span = tracing::debug_span!("winit::Window::theme",).entered();
@@ -1391,8 +1390,8 @@ impl Window {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS**: if `false`, [`NSWindowSharingNone`] is used but doesn't completely
-    /// prevent all apps from reading the window content, for instance, QuickTime.
+    /// - **macOS**: if `false`, [`NSWindowSharingNone`] is used but doesn't completely prevent all
+    ///   apps from reading the window content, for instance, QuickTime.
     /// - **iOS / Android / x11 / Wayland / Web / Orbital:** Unsupported.
     ///
     /// [`NSWindowSharingNone`]: https://developer.apple.com/documentation/appkit/nswindowsharingtype/nswindowsharingnone
@@ -1851,11 +1850,34 @@ impl Default for ImePurpose {
 /// [`Window`]: crate::window::Window
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ActivationToken {
-    pub(crate) _token: String,
+    pub(crate) token: String,
 }
 
 impl ActivationToken {
-    pub(crate) fn _new(_token: String) -> Self {
-        Self { _token }
+    /// Make an [`ActivationToken`] from a string.
+    ///
+    /// This method should be used to wrap tokens passed by side channels to your application, like
+    /// dbus.
+    ///
+    /// The validity of the token is ensured by the windowing system. Using the invalid token will
+    /// only result in the side effect of the operation involving it being ignored (e.g. window
+    /// won't get focused automatically), but won't yield any errors.
+    ///
+    /// To obtain a valid token, use
+    #[cfg_attr(any(x11_platform, wayland_platform, docsrs), doc = " [`request_activation_token`].")]
+    #[cfg_attr(
+        not(any(x11_platform, wayland_platform, docsrs)),
+        doc = " `request_activation_token`."
+    )]
+    ///
+    #[rustfmt::skip]
+    /// [`request_activation_token`]: crate::platform::startup_notify::WindowExtStartupNotify::request_activation_token
+    pub fn from_raw(token: String) -> Self {
+        Self { token }
+    }
+
+    /// Convert the token to its string representation to later pass via IPC.
+    pub fn into_raw(self) -> String {
+        self.token
     }
 }

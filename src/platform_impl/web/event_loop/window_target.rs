@@ -18,7 +18,7 @@ use crate::event::{
 };
 use crate::event_loop::{ControlFlow, DeviceEvents};
 use crate::keyboard::ModifiersState;
-use crate::platform::web::{CustomCursorFuture, PollStrategy};
+use crate::platform::web::{CustomCursorFuture, PollStrategy, WaitUntilStrategy};
 use crate::platform_impl::platform::cursor::CustomCursor;
 use crate::platform_impl::platform::r#async::Waker;
 use crate::window::{
@@ -142,7 +142,7 @@ impl ActiveEventLoop {
                     }
                 });
 
-                let device_id = RootDeviceId(unsafe { DeviceId::dummy() });
+                let device_id = RootDeviceId(DeviceId::dummy());
 
                 runner.send_events(
                     iter::once(Event::WindowEvent {
@@ -178,7 +178,7 @@ impl ActiveEventLoop {
                     }
                 });
 
-                let device_id = RootDeviceId(unsafe { DeviceId::dummy() });
+                let device_id = RootDeviceId(DeviceId::dummy());
 
                 runner.send_events(
                     iter::once(Event::WindowEvent {
@@ -258,21 +258,6 @@ impl ActiveEventLoop {
         });
 
         canvas.on_cursor_move(
-            {
-                let runner = self.runner.clone();
-                let has_focus = has_focus.clone();
-                let modifiers = self.modifiers.clone();
-
-                move |active_modifiers| {
-                    if has_focus.get() && modifiers.get() != active_modifiers {
-                        modifiers.set(active_modifiers);
-                        runner.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(id),
-                            event: WindowEvent::ModifiersChanged(active_modifiers.into()),
-                        })
-                    }
-                }
-            },
             {
                 let runner = self.runner.clone();
                 let has_focus = has_focus.clone();
@@ -376,20 +361,6 @@ impl ActiveEventLoop {
                 let runner = self.runner.clone();
                 let modifiers = self.modifiers.clone();
 
-                move |active_modifiers| {
-                    if modifiers.get() != active_modifiers {
-                        modifiers.set(active_modifiers);
-                        runner.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(id),
-                            event: WindowEvent::ModifiersChanged(active_modifiers.into()),
-                        })
-                    }
-                }
-            },
-            {
-                let runner = self.runner.clone();
-                let modifiers = self.modifiers.clone();
-
                 move |active_modifiers, pointer_id, position, button| {
                     let modifiers = (modifiers.get() != active_modifiers).then(|| {
                         modifiers.set(active_modifiers);
@@ -450,21 +421,6 @@ impl ActiveEventLoop {
         );
 
         canvas.on_mouse_release(
-            {
-                let runner = self.runner.clone();
-                let has_focus = has_focus.clone();
-                let modifiers = self.modifiers.clone();
-
-                move |active_modifiers| {
-                    if has_focus.get() && modifiers.get() != active_modifiers {
-                        modifiers.set(active_modifiers);
-                        runner.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(id),
-                            event: WindowEvent::ModifiersChanged(active_modifiers.into()),
-                        });
-                    }
-                }
-            },
             {
                 let runner = self.runner.clone();
                 let has_focus = has_focus.clone();
@@ -605,7 +561,7 @@ impl ActiveEventLoop {
                             window_id: RootWindowId(id),
                             event: WindowEvent::Resized(new_size),
                         });
-                        runner.request_redraw(RootWindowId(id));
+                        canvas.request_animation_frame();
                     }
                 }
             },
@@ -658,6 +614,16 @@ impl ActiveEventLoop {
         self.runner.listen_device_events(allowed)
     }
 
+    pub fn system_theme(&self) -> Option<Theme> {
+        backend::is_dark_mode(self.runner.window()).map(|is_dark_mode| {
+            if is_dark_mode {
+                Theme::Dark
+            } else {
+                Theme::Light
+            }
+        })
+    }
+
     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
         self.runner.set_control_flow(control_flow)
     }
@@ -680,6 +646,14 @@ impl ActiveEventLoop {
 
     pub(crate) fn poll_strategy(&self) -> PollStrategy {
         self.runner.poll_strategy()
+    }
+
+    pub(crate) fn set_wait_until_strategy(&self, strategy: WaitUntilStrategy) {
+        self.runner.set_wait_until_strategy(strategy)
+    }
+
+    pub(crate) fn wait_until_strategy(&self) -> WaitUntilStrategy {
+        self.runner.wait_until_strategy()
     }
 
     pub(crate) fn waker(&self) -> Waker<Weak<Execution>> {

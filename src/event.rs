@@ -405,6 +405,8 @@ pub enum WindowEvent {
     /// Applications might wish to react to this to change the theme of the content of the window
     /// when the system changes the window theme.
     ///
+    /// This only reports a change if the window theme was not overridden by [`Window::set_theme`].
+    ///
     /// ## Platform-specific
     ///
     /// - **iOS / Android / X11 / Wayland / Orbital:** Unsupported.
@@ -463,16 +465,13 @@ pub struct DeviceId(pub(crate) platform_impl::DeviceId);
 impl DeviceId {
     /// Returns a dummy id, useful for unit testing.
     ///
-    /// # Safety
+    /// # Notes
     ///
     /// The only guarantee made about the return value of this function is that
     /// it will always be equal to itself and to future values returned by this function.
     /// No other guarantees are made. This may be equal to a real `DeviceId`.
-    ///
-    /// **Passing this into a winit function will result in undefined behavior.**
-    pub const unsafe fn dummy() -> Self {
-        #[allow(unused_unsafe)]
-        DeviceId(unsafe { platform_impl::DeviceId::dummy() })
+    pub const fn dummy() -> Self {
+        DeviceId(platform_impl::DeviceId::dummy())
     }
 }
 
@@ -549,11 +548,11 @@ pub struct KeyEvent {
     /// ## Caveats
     ///
     /// - Certain niche hardware will shuffle around physical key positions, e.g. a keyboard that
-    /// implements DVORAK in hardware (or firmware)
+    ///   implements DVORAK in hardware (or firmware)
     /// - Your application will likely have to handle keyboards which are missing keys that your
-    /// own keyboard has.
+    ///   own keyboard has.
     /// - Certain `KeyCode`s will move between a couple of different positions depending on what
-    /// layout the keyboard was manufactured to support.
+    ///   layout the keyboard was manufactured to support.
     ///
     ///  **Because of these caveats, it is important that you provide users with a way to configure
     ///  most (if not all) keybinds in your application.**
@@ -575,8 +574,7 @@ pub struct KeyEvent {
     ///
     /// This has two use cases:
     /// - Allows querying whether the current input is a Dead key.
-    /// - Allows handling key-bindings on platforms which don't
-    /// support [`key_without_modifiers`].
+    /// - Allows handling key-bindings on platforms which don't support [`key_without_modifiers`].
     ///
     /// If you use this field (or [`key_without_modifiers`] for that matter) for keyboard
     /// shortcuts, **it is important that you provide users with a way to configure your
@@ -584,8 +582,8 @@ pub struct KeyEvent {
     /// incompatible keyboard layout.**
     ///
     /// ## Platform-specific
-    /// - **Web:** Dead keys might be reported as the real key instead
-    /// of `Dead` depending on the browser/OS.
+    /// - **Web:** Dead keys might be reported as the real key instead of `Dead` depending on the
+    ///   browser/OS.
     ///
     /// [`key_without_modifiers`]: crate::platform::modifier_supplement::KeyEventExtModifierSupplement::key_without_modifiers
     pub logical_key: keyboard::Key,
@@ -867,8 +865,8 @@ pub struct Touch {
     ///
     /// - Only available on **iOS** 9.0+, **Windows** 8+, **Web**, and **Android**.
     /// - **Android**: This will never be [None]. If the device doesn't support pressure
-    /// sensitivity, force will either be 0.0 or 1.0. Also see the
-    /// [android documentation](https://developer.android.com/reference/android/view/MotionEvent#AXIS_PRESSURE).
+    ///   sensitivity, force will either be 0.0 or 1.0. Also see the
+    ///   [android documentation](https://developer.android.com/reference/android/view/MotionEvent#AXIS_PRESSURE).
     pub force: Option<Force>,
     /// Unique identifier of a finger.
     pub id: u64,
@@ -1035,7 +1033,7 @@ mod tests {
         ($closure:expr) => {{
             #[allow(unused_mut)]
             let mut x = $closure;
-            let did = unsafe { event::DeviceId::dummy() };
+            let did = event::DeviceId::dummy();
 
             #[allow(deprecated)]
             {
@@ -1045,7 +1043,7 @@ mod tests {
                 use crate::window::WindowId;
 
                 // Mainline events.
-                let wid = unsafe { WindowId::dummy() };
+                let wid = WindowId::dummy();
                 x(UserEvent(()));
                 x(NewEvents(event::StartCause::Init));
                 x(AboutToWait);
@@ -1174,7 +1172,7 @@ mod tests {
         });
         let _ = event::StartCause::Init.clone();
 
-        let did = unsafe { crate::event::DeviceId::dummy() }.clone();
+        let did = crate::event::DeviceId::dummy().clone();
         HashSet::new().insert(did);
         let mut set = [did, did, did];
         set.sort_unstable();

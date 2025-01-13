@@ -1,3 +1,15 @@
+use std::cell::{Cell, RefCell};
+use std::collections::{HashSet, VecDeque};
+use std::iter;
+use std::num::NonZeroUsize;
+use std::ops::Deref;
+use std::rc::{Rc, Weak};
+
+use wasm_bindgen::prelude::Closure;
+use wasm_bindgen::JsCast;
+use web_sys::{Document, KeyboardEvent, PageTransitionEvent, PointerEvent, WheelEvent};
+use web_time::{Duration, Instant};
+
 use super::super::main_thread::MainThreadMarker;
 use super::super::DeviceId;
 use super::backend;
@@ -8,20 +20,11 @@ use crate::event::{
     WindowEvent,
 };
 use crate::event_loop::{ControlFlow, DeviceEvents};
-use crate::platform::web::PollStrategy;
+use crate::platform::web::{PollStrategy, WaitUntilStrategy};
 use crate::platform_impl::platform::backend::EventListenerHandle;
 use crate::platform_impl::platform::r#async::{DispatchRunner, Waker, WakerSpawner};
 use crate::platform_impl::platform::window::Inner;
 use crate::window::WindowId;
-
-use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
-use std::iter;
-use std::ops::Deref;
-use std::rc::{Rc, Weak};
-use wasm_bindgen::prelude::Closure;
-use web_sys::{Document, KeyboardEvent, PageTransitionEvent, PointerEvent, WheelEvent};
-use web_time::{Duration, Instant};
 
 pub struct Shared(Rc<Execution>);
 
@@ -40,6 +43,7 @@ pub struct Execution {
     proxy_spawner: WakerSpawner<Weak<Self>>,
     control_flow: Cell<ControlFlow>,
     poll_strategy: Cell<PollStrategy>,
+    wait_until_strategy: Cell<WaitUntilStrategy>,
     exit: Cell<bool>,
     runner: RefCell<RunnerEnum>,
     suspended: Cell<bool>,
@@ -133,18 +137,20 @@ impl Shared {
         let document = window.document().expect("Failed to obtain document");
 
         Shared(Rc::<Execution>::new_cyclic(|weak| {
-            let proxy_spawner = WakerSpawner::new(main_thread, weak.clone(), |runner, count| {
-                if let Some(runner) = runner.upgrade() {
-                    Shared(runner).send_events(iter::repeat(Event::UserEvent(())).take(count))
-                }
-            })
-            .expect("`EventLoop` has to be created in the main thread");
+            let proxy_spawner =
+                WakerSpawner::new(main_thread, weak.clone(), |runner, count, local| {
+                    if let Some(runner) = runner.upgrade() {
+                        Shared(runner).send_user_events(count, local)
+                    }
+                })
+                .expect("`EventLoop` has to be created in the main thread");
 
             Execution {
                 main_thread,
                 proxy_spawner,
                 control_flow: Cell::new(ControlFlow::default()),
                 poll_strategy: Cell::new(PollStrategy::default()),
+                wait_until_strategy: Cell::new(WaitUntilStrategy::default()),
                 exit: Cell::new(false),
                 runner: RefCell::new(RunnerEnum::Pending),
                 suspended: Cell::new(false),
@@ -239,21 +245,10 @@ impl Shared {
                     return;
                 }
 
-                let pointer_type = event.pointer_type();
-
-                if pointer_type != "mouse" {
-                    return;
-                }
-
                 // chorded button event
                 let device_id = RootDeviceId(DeviceId(event.pointer_id()));
 
                 if let Some(button) = backend::event::mouse_button(&event) {
-                    debug_assert_eq!(
-                        pointer_type, "mouse",
-                        "expect pointer type of a chorded button event to be a mouse"
-                    );
-
                     let state = if backend::event::mouse_buttons(&event).contains(button.into()) {
                         ElementState::Pressed
                     } else {
@@ -317,10 +312,6 @@ impl Shared {
                     return;
                 }
 
-                if event.pointer_type() != "mouse" {
-                    return;
-                }
-
                 let button = backend::event::mouse_button(&event).expect("no mouse button pressed");
                 runner.send_event(Event::DeviceEvent {
                     device_id: RootDeviceId(DeviceId(event.pointer_id())),
@@ -337,10 +328,6 @@ impl Shared {
             "pointerup",
             Closure::new(move |event: PointerEvent| {
                 if !runner.device_events() {
-                    return;
-                }
-
-                if event.pointer_type() != "mouse" {
                     return;
                 }
 
@@ -364,7 +351,7 @@ impl Shared {
                 }
 
                 runner.send_event(Event::DeviceEvent {
-                    device_id: RootDeviceId(unsafe { DeviceId::dummy() }),
+                    device_id: RootDeviceId(DeviceId::dummy()),
                     event: DeviceEvent::Key(RawKeyEvent {
                         physical_key: backend::event::key_code(&event),
                         state: ElementState::Pressed,
@@ -382,7 +369,7 @@ impl Shared {
                 }
 
                 runner.send_event(Event::DeviceEvent {
-                    device_id: RootDeviceId(unsafe { DeviceId::dummy() }),
+                    device_id: RootDeviceId(DeviceId::dummy()),
                     event: DeviceEvent::Key(RawKeyEvent {
                         physical_key: backend::event::key_code(&event),
                         state: ElementState::Released,
@@ -460,6 +447,42 @@ impl Shared {
         self.send_events(iter::once(event));
     }
 
+    // Add a series of user events to the event loop runner
+    //
+    // This will schedule the event loop to wake up instead of waking it up immediately if its not
+    // running.
+    pub(crate) fn send_user_events(&self, count: NonZeroUsize, local: bool) {
+        // If the event loop is closed, it should discard any new events
+        if self.is_closed() {
+            return;
+        }
+
+        if local {
+            // If the loop is not running and triggered locally, queue on next microtick.
+            if let Ok(RunnerEnum::Running(_)) =
+                self.0.runner.try_borrow().as_ref().map(Deref::deref)
+            {
+                self.window().queue_microtask(
+                    &Closure::once_into_js({
+                        let this = Rc::downgrade(&self.0);
+                        move || {
+                            if let Some(shared) = this.upgrade() {
+                                Shared(shared).send_events(
+                                    iter::repeat(Event::UserEvent(())).take(count.get()),
+                                )
+                            }
+                        }
+                    })
+                    .unchecked_into(),
+                );
+
+                return;
+            }
+        }
+
+        self.send_events(iter::repeat(Event::UserEvent(())).take(count.get()))
+    }
+
     // Add a series of events to the event loop runner
     //
     // It will determine if the event should be immediately sent to the user or buffered for later
@@ -473,7 +496,7 @@ impl Shared {
         match self.0.runner.try_borrow().as_ref().map(Deref::deref) {
             Ok(RunnerEnum::Running(ref runner)) => {
                 // If we're currently polling, queue this and wait for the poll() method to be
-                // called
+                // called.
                 if let State::Poll { .. } = runner.state {
                     process_immediately = false;
                 }
@@ -647,6 +670,7 @@ impl Shared {
                         start,
                         end,
                         _timeout: backend::Schedule::new_with_duration(
+                            self.wait_until_strategy(),
                             self.window(),
                             move || cloned.resume_time_reached(start, end),
                             delay,
@@ -757,6 +781,14 @@ impl Shared {
 
     pub(crate) fn poll_strategy(&self) -> PollStrategy {
         self.0.poll_strategy.get()
+    }
+
+    pub(crate) fn set_wait_until_strategy(&self, strategy: WaitUntilStrategy) {
+        self.0.wait_until_strategy.set(strategy)
+    }
+
+    pub(crate) fn wait_until_strategy(&self) -> WaitUntilStrategy {
+        self.0.wait_until_strategy.get()
     }
 
     pub(crate) fn waker(&self) -> Waker<Weak<Execution>> {
