@@ -56,6 +56,7 @@ pub struct PlatformSpecificWindowAttributes {
     pub tabbing_identifier: Option<String>,
     pub option_as_alt: OptionAsAlt,
     pub borderless_game: bool,
+    pub blur_radius: i64,
 }
 
 impl Default for PlatformSpecificWindowAttributes {
@@ -74,6 +75,7 @@ impl Default for PlatformSpecificWindowAttributes {
             tabbing_identifier: None,
             option_as_alt: Default::default(),
             borderless_game: false,
+            blur_radius: 80,
         }
     }
 }
@@ -123,6 +125,7 @@ pub(crate) struct State {
     is_simple_fullscreen: Cell<bool>,
     saved_style: Cell<Option<NSWindowStyleMask>>,
     is_borderless_game: Cell<bool>,
+    blur_radius: Cell<i64>,
 }
 
 declare_class!(
@@ -729,6 +732,7 @@ impl WindowDelegate {
             is_simple_fullscreen: Cell::new(false),
             saved_style: Cell::new(None),
             is_borderless_game: Cell::new(attrs.platform_specific.borderless_game),
+            blur_radius: Cell::new(attrs.platform_specific.blur_radius),
         });
         let delegate: Retained<WindowDelegate> = unsafe { msg_send_id![super(delegate), init] };
 
@@ -823,13 +827,10 @@ impl WindowDelegate {
 
         let suggested_size = content_size.to_physical(scale_factor);
         let new_inner_size = Arc::new(Mutex::new(suggested_size));
-        app_delegate.handle_window_event(
-            window.id(),
-            WindowEvent::ScaleFactorChanged {
-                scale_factor,
-                inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
-            },
-        );
+        app_delegate.handle_window_event(window.id(), WindowEvent::ScaleFactorChanged {
+            scale_factor,
+            inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
+        });
         let physical_size = *new_inner_size.lock().unwrap();
         drop(new_inner_size);
 
@@ -885,9 +886,7 @@ impl WindowDelegate {
     }
 
     pub fn set_blur(&self, blur: bool) {
-        // NOTE: in general we want to specify the blur radius, but the choice of 80
-        // should be a reasonable default.
-        let radius = if blur { 80 } else { 0 };
+        let radius = if blur { self.blur_radius() } else { 0 };
         let window_number = unsafe { self.window().windowNumber() };
         unsafe {
             ffi::CGSSetWindowBackgroundBlurRadius(
@@ -1854,6 +1853,14 @@ impl WindowExtMacOS for WindowDelegate {
 
     fn is_borderless_game(&self) -> bool {
         self.ivars().is_borderless_game.get()
+    }
+
+    fn set_blur_radius(&self, blur_radius: i64) {
+        self.ivars().blur_radius.set(blur_radius);
+    }
+
+    fn blur_radius(&self) -> i64 {
+        self.ivars().blur_radius.get()
     }
 }
 

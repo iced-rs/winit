@@ -100,6 +100,17 @@ pub trait WindowExtMacOS {
 
     /// Getter for the [`WindowExtMacOS::set_borderless_game`].
     fn is_borderless_game(&self) -> bool;
+
+    /// Set the blur radius of the window.
+    ///
+    /// Only applies to a window if it's both [`transparent`] and [`blurred`].
+    ///
+    /// [`transparent`]: Window::set_transparent
+    /// [`blurred`]: Window::set_blur
+    fn set_blur_radius(&self, blur_radius: i64);
+
+    /// Getter for the [`WindowExtMacOS::set_blur_radius`].
+    fn blur_radius(&self) -> i64;
 }
 
 impl WindowExtMacOS for Window {
@@ -182,6 +193,16 @@ impl WindowExtMacOS for Window {
     fn is_borderless_game(&self) -> bool {
         self.window.maybe_wait_on_main(|w| w.is_borderless_game())
     }
+
+    #[inline]
+    fn set_blur_radius(&self, blur_radius: i64) {
+        self.window.maybe_wait_on_main(|w| w.set_blur_radius(blur_radius))
+    }
+
+    #[inline]
+    fn blur_radius(&self) -> i64 {
+        self.window.maybe_wait_on_main(|w| w.blur_radius())
+    }
 }
 
 /// Corresponds to `NSApplicationActivationPolicy`.
@@ -234,6 +255,10 @@ pub trait WindowAttributesExtMacOS {
     fn with_option_as_alt(self, option_as_alt: OptionAsAlt) -> Self;
     /// See [`WindowExtMacOS::set_borderless_game`] for details on what this means if set.
     fn with_borderless_game(self, borderless_game: bool) -> Self;
+    /// Sets the blur radius of the window.
+    ///
+    /// See [`WindowExtMacOS::set_blur_radius`] for details on what this means if set.
+    fn with_blur_radius(self, blur_radius: i64) -> Self;
 }
 
 impl WindowAttributesExtMacOS for WindowAttributes {
@@ -306,6 +331,12 @@ impl WindowAttributesExtMacOS for WindowAttributes {
     #[inline]
     fn with_borderless_game(mut self, borderless_game: bool) -> Self {
         self.platform_specific.borderless_game = borderless_game;
+        self
+    }
+
+    #[inline]
+    fn with_blur_radius(mut self, blur_radius: i64) -> Self {
+        self.platform_specific.blur_radius = blur_radius;
         self
     }
 }
