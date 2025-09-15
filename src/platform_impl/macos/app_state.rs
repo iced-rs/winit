@@ -69,6 +69,17 @@ declare_class!(
         type Ivars = AppState;
     }
 
+    unsafe impl ApplicationDelegate {
+        #[method(handleUrl:withReplyEvent:)]
+        fn handle_url(&self, event: *mut AnyObject, _reply: *mut AnyObject) {
+            if let Some(string) = parse_url(event) {
+                self.handle_event(Event::PlatformSpecific(PlatformSpecific::MacOS(
+                    MacOS::ReceivedUrl(string),
+                )));
+            }
+        }
+    }
+
     unsafe impl NSObjectProtocol for ApplicationDelegate {}
 
     unsafe impl NSApplicationDelegate for ApplicationDelegate {
@@ -88,19 +99,10 @@ declare_class!(
 
                 let () = msg_send![shared_manager,
                     setEventHandler: self
-                    andSelector: sel!(handleEvent:withReplyEvent:)
+                    andSelector: sel!(handleUrl:withReplyEvent:)
                     forEventClass: kInternetEventClass
                     andEventID: kAEGetURL
                 ];
-            }
-        }
-
-        #[method(handleEvent:withReplyEvent:)]
-        fn handle_url(&self, event: *mut AnyObject, _reply: u64) {
-            if let Some(string) = parse_url(event) {
-                self.handle_event(Event::PlatformSpecific(PlatformSpecific::MacOS(
-                    MacOS::ReceivedUrl(string),
-                )));
             }
         }
 
