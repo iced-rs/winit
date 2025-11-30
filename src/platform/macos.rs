@@ -262,14 +262,12 @@ impl WindowExtMacOS for Window {
 
     #[inline]
     fn set_unified_titlebar(&self, unified_titlebar: bool) {
-        let window = self.as_any().downcast_ref::<crate::platform_impl::Window>().unwrap();
-        window.maybe_wait_on_main(|w| w.set_unified_titlebar(unified_titlebar))
+        self.window.maybe_queue_on_main(move |w| w.set_unified_titlebar(unified_titlebar))
     }
 
     #[inline]
     fn unified_titlebar(&self) -> bool {
-        let window = self.as_any().downcast_ref::<crate::platform_impl::Window>().unwrap();
-        window.maybe_wait_on_main(|w| w.unified_titlebar())
+        self.window.maybe_wait_on_main(|w| w.unified_titlebar())
     }
 }
 
