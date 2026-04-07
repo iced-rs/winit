@@ -81,9 +81,7 @@ impl InputMethod {
         }
 
         let preedit_style = preedit_style.unwrap_or_else(|| none_style.unwrap());
-        // Always initialize none style even when it's not advertised, since it seems to work
-        // regardless...
-        let none_style = none_style.unwrap_or(Style::None(XIM_NONE_STYLE));
+        let none_style = none_style.unwrap_or(preedit_style);
 
         Some(InputMethod { im, _name: name, preedit_style, none_style })
     }
@@ -178,7 +176,7 @@ unsafe fn get_xim_servers(xconn: &Arc<XConnection>) -> Result<Vec<String>, GetXi
         )
         .map_err(GetXimServersError::GetPropertyError)?
         .into_iter()
-        .map(ffi::Atom::from)
+        .map(|atom| atom as _)
         .collect::<Vec<_>>();
 
     let mut names: Vec<*const c_char> = Vec::with_capacity(atoms.len());

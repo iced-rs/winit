@@ -1,6 +1,6 @@
 [package]
 name = "winit"
-version = "0.30.8"
+version = "0.30.13"
 authors = [
     "The winit contributors",
     "Pierre Krieger <pierre.krieger1708@gmail.com>",
@@ -117,12 +117,12 @@ android-activity = "0.6.0"
 ndk = { version = "0.9.0", default-features = false }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+block2 = "0.5.1"
 core-foundation = "0.9.3"
-objc2 = "0.5.2"
+objc2 = { version = "0.5.2", features = ["relax-sign-encoding"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23.1"
-block2 = "0.5.1"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 version = "0.2.2"
@@ -171,6 +171,7 @@ features = [
     "NSScreen",
     "NSTextInputClient",
     "NSTextInputContext",
+    "NSToolbar",
     "NSView",
     "NSWindow",
     "NSWindowScripting",
@@ -180,11 +181,13 @@ features = [
 [target.'cfg(target_os = "ios")'.dependencies.objc2-foundation]
 version = "0.2.2"
 features = [
+    "block2",
     "dispatch",
     "NSArray",
     "NSEnumerator",
     "NSGeometry",
     "NSObjCRuntime",
+    "NSOperation",
     "NSString",
     "NSProcessInfo",
     "NSThread",
@@ -266,14 +269,14 @@ sctk = { package = "smithay-client-toolkit", version = "0.19.2", default-feature
     "calloop",
 ], optional = true }
 sctk-adwaita = { version = "0.10.1", default-features = false, optional = true }
-wayland-backend = { version = "0.3.5", default-features = false, features = [
+wayland-backend = { version = "0.3.10", default-features = false, features = [
     "client_system",
 ], optional = true }
-wayland-client = { version = "0.31.4", optional = true }
-wayland-protocols = { version = "0.32.2", features = [
+wayland-client = { version = "0.31.10", optional = true }
+wayland-protocols = { version = "0.32.8", features = [
     "staging",
 ], optional = true }
-wayland-protocols-plasma = { version = "0.3.2", features = [
+wayland-protocols-plasma = { version = "0.3.8", features = [
     "client",
 ], optional = true }
 x11-dl = { version = "2.19.1", optional = true }

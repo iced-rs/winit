@@ -574,9 +574,11 @@ fn main_thread_id() -> u32 {
     //
     // See: https://doc.rust-lang.org/stable/reference/abi.html#the-link_section-attribute
     #[link_section = ".CRT$XCU"]
-    static INIT_MAIN_THREAD_ID: unsafe fn() = {
-        unsafe fn initer() {
-            unsafe { MAIN_THREAD_ID = GetCurrentThreadId() };
+    static INIT_MAIN_THREAD_ID: unsafe extern "C" fn() = {
+        unsafe extern "C" fn initer() {
+            unsafe {
+                MAIN_THREAD_ID = GetCurrentThreadId();
+            }
         }
         initer
     };
@@ -738,7 +740,7 @@ fn wait_for_messages_impl(
 
     unsafe {
         // Either:
-        //  1. User wants to wait indefinely if timeout is not set.
+        //  1. User wants to wait indefinitely if timeout is not set.
         //  2. We failed to get and set high resolution timer and we need something instead of it.
         let wait_duration_ms = timeout.map(dur2timeout).unwrap_or(INFINITE);
 
@@ -1216,6 +1218,31 @@ unsafe fn public_window_callback_inner(
 
         WM_NCLBUTTONDOWN => {
             if wparam == HTCAPTION as _ {
+                // Prevent the user event loop from pausing when left clicking the title bar.
+                //
+                // When the user interacts with the title bar, Windows enters the modal event
+                // loop. Currently, a left click causes a pause for about 500ms. Sending a dummy
+                // mouse-move event seems to cancel the modal loop early, preventing the pause.
+                // The application will never see this dummy event.
+                //
+                // The mouse coordinates are encoded into the lparam value, however the WM_MOUSEMOVE
+                // event is not using the same coordinate system of the WM_NCLBUTTONDOWN event.
+                // One uses client-area coordinates and the other is screen-coordinates. In any
+                // case, passing the lparam as-is with the dummy event does not seem the cancel
+                // the modal loop.
+                //
+                // However, passing in a value of 0 has been observed to always cancel the pause.
+                //
+                // Other notes:
+                //
+                // For some unknown reason, the cursor will blink when clicking the title bar.
+                // Cancelling the modal loop early causes the blink to happen *immediately*.
+                // Otherwise, the blank happens *after* the pause.
+                //
+                // When right-click the title bar, the system window menu is presented to the user,
+                // and the modal event loop begins. This dummy event does *not* prevent the freeze
+                // in the main event loop caused by that popup menu.
+                let lparam = 0;
                 unsafe { PostMessageW(window, WM_MOUSEMOVE, 0, lparam) };
             }
             result = ProcResult::DefWindowProc(wparam);
@@ -1585,9 +1612,9 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_IME_SETCONTEXT => {
-            // Hide composing text drawn by IME.
-            let wparam = wparam & (!ISC_SHOWUICOMPOSITIONWINDOW as usize);
-            result = ProcResult::DefWindowProc(wparam);
+            // IME UI visibility flags are in lparam.
+            let lparam = lparam & !(ISC_SHOWUICOMPOSITIONWINDOW as isize);
+            result = ProcResult::Value(unsafe { DefWindowProcW(window, msg, wparam, lparam) });
         },
 
         // this is necessary for us to maintain minimize/restore state
@@ -2614,7 +2641,7 @@ unsafe fn handle_raw_input(userdata: &ThreadMsgTargetData, data: RAWINPUT) {
 }
 
 enum PointerMoveKind {
-    /// Pointer enterd to the window.
+    /// Pointer entered to the window.
     Enter,
     /// Pointer leaved the window client area.
     Leave,

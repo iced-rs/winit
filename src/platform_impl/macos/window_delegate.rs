@@ -14,9 +14,10 @@ use objc2_app_kit::{
     NSAppKitVersionNumber, NSAppKitVersionNumber10_12, NSAppearance, NSAppearanceCustomization,
     NSAppearanceNameAqua, NSApplication, NSApplicationPresentationOptions, NSBackingStoreType,
     NSColor, NSDraggingDestination, NSFilenamesPboardType, NSPasteboard,
-    NSRequestUserAttentionType, NSScreen, NSView, NSWindowButton, NSWindowDelegate,
+    NSRequestUserAttentionType, NSScreen, NSToolbar, NSView, NSWindowButton, NSWindowDelegate,
     NSWindowFullScreenButton, NSWindowLevel, NSWindowOcclusionState, NSWindowOrderingMode,
     NSWindowSharingType, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     ns_string, CGFloat, MainThreadMarker, NSArray, NSCopying, NSDictionary, NSKeyValueChangeKey,
@@ -56,6 +57,7 @@ pub struct PlatformSpecificWindowAttributes {
     pub tabbing_identifier: Option<String>,
     pub option_as_alt: OptionAsAlt,
     pub borderless_game: bool,
+    pub unified_titlebar: bool,
 }
 
 impl Default for PlatformSpecificWindowAttributes {
@@ -74,6 +76,7 @@ impl Default for PlatformSpecificWindowAttributes {
             tabbing_identifier: None,
             option_as_alt: Default::default(),
             borderless_game: false,
+            unified_titlebar: false,
         }
     }
 }
@@ -373,7 +376,10 @@ declare_class!(
             use std::path::PathBuf;
 
             let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
-            let filenames = pb.propertyListForType(unsafe { NSFilenamesPboardType }).unwrap();
+            let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
+                Some(filenames) => filenames,
+                None => return false.into(),
+            };
             let filenames: Retained<NSArray<NSString>> = unsafe { Retained::cast(filenames) };
 
             filenames.into_iter().for_each(|file| {
@@ -399,7 +405,10 @@ declare_class!(
             use std::path::PathBuf;
 
             let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
-            let filenames = pb.propertyListForType(unsafe { NSFilenamesPboardType }).unwrap();
+            let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
+                Some(filenames) => filenames,
+                None => return false.into(),
+            };
             let filenames: Retained<NSArray<NSString>> = unsafe { Retained::cast(filenames) };
 
             filenames.into_iter().for_each(|file| {
@@ -609,6 +618,14 @@ fn new_window(
         }
         if attrs.platform_specific.movable_by_window_background {
             window.setMovableByWindowBackground(true);
+        }
+        if attrs.platform_specific.unified_titlebar {
+            unsafe {
+                // The toolbar style is ignored if there is no toolbar, so it is
+                // necessary to add one.
+                window.setToolbar(Some(&NSToolbar::new(mtm)));
+                window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+            }
         }
 
         if !attrs.enabled_buttons.contains(WindowButtons::MAXIMIZE) {
@@ -1595,7 +1612,14 @@ impl WindowDelegate {
     // Allow directly accessing the current monitor internally without unwrapping.
     pub(crate) fn current_monitor_inner(&self) -> Option<MonitorHandle> {
         let display_id = get_display_id(&*self.window().screen()?);
-        Some(MonitorHandle::new(display_id))
+        if let Some(monitor) = MonitorHandle::new(display_id) {
+            Some(monitor)
+        } else {
+            // NOTE: Display ID was just fetched from live NSScreen, but can still result in `None`
+            // with certain Thunderbolt docked monitors.
+            warn!(display_id, "got screen with invalid display ID");
+            None
+        }
     }
 
     #[inline]
@@ -1749,9 +1773,13 @@ impl WindowExtMacOS for WindowDelegate {
             self.ivars().is_simple_fullscreen.set(true);
 
             // Simulate pre-Lion fullscreen by hiding the dock and menu bar
-            let presentation_options =
+            let presentation_options = if self.is_borderless_game() {
+                NSApplicationPresentationOptions::NSApplicationPresentationHideDock
+                    | NSApplicationPresentationOptions::NSApplicationPresentationHideMenuBar
+            } else {
                 NSApplicationPresentationOptions::NSApplicationPresentationAutoHideDock
-                    | NSApplicationPresentationOptions::NSApplicationPresentationAutoHideMenuBar;
+                    | NSApplicationPresentationOptions::NSApplicationPresentationAutoHideMenuBar
+            };
             app.setPresentationOptions(presentation_options);
 
             // Hide the titlebar
@@ -1765,11 +1793,8 @@ impl WindowExtMacOS for WindowDelegate {
             self.toggle_style_mask(NSWindowStyleMask::Miniaturizable, false);
             self.toggle_style_mask(NSWindowStyleMask::Resizable, false);
             self.window().setMovable(false);
-
-            true
         } else {
             let new_mask = self.saved_style();
-            self.set_style_mask(new_mask);
             self.ivars().is_simple_fullscreen.set(false);
 
             let save_presentation_opts = self.ivars().save_presentation_opts.get();
@@ -1781,9 +1806,10 @@ impl WindowExtMacOS for WindowDelegate {
 
             self.window().setFrame_display(frame, true);
             self.window().setMovable(true);
-
-            true
+            self.set_style_mask(new_mask);
         }
+
+        true
     }
 
     #[inline]
@@ -1854,6 +1880,34 @@ impl WindowExtMacOS for WindowDelegate {
 
     fn is_borderless_game(&self) -> bool {
         self.ivars().is_borderless_game.get()
+    }
+
+    fn set_unified_titlebar(&self, unified_titlebar: bool) {
+        let window = self.window();
+
+        if unified_titlebar {
+            let mtm = MainThreadMarker::from(self);
+
+            unsafe {
+                // The toolbar style is ignored if there is no toolbar, so it is
+                // necessary to add one.
+                window.setToolbar(Some(&NSToolbar::new(mtm)));
+                window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+            }
+        } else {
+            unsafe {
+                window.setToolbar(None);
+                window.setToolbarStyle(NSWindowToolbarStyle::Automatic);
+            }
+        }
+    }
+
+    fn unified_titlebar(&self) -> bool {
+        let window = self.window();
+
+        unsafe {
+            window.toolbar().is_some() && window.toolbarStyle() == NSWindowToolbarStyle::Unified
+        }
     }
 }
 

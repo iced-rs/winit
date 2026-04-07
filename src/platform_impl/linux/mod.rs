@@ -696,6 +696,7 @@ unsafe extern "C" fn x_error_callback(
     0
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum EventLoop<T: 'static> {
     #[cfg(wayland_platform)]
     Wayland(Box<wayland::EventLoop<T>>),
@@ -768,9 +769,9 @@ impl<T: 'static> EventLoop<T> {
         // Create the display based on the backend.
         match backend {
             #[cfg(wayland_platform)]
-            Backend::Wayland => EventLoop::new_wayland_any_thread().map_err(Into::into),
+            Backend::Wayland => EventLoop::new_wayland_any_thread(),
             #[cfg(x11_platform)]
-            Backend::X => EventLoop::new_x11_any_thread().map_err(Into::into),
+            Backend::X => EventLoop::new_x11_any_thread(),
         }
     }
 
@@ -849,6 +850,7 @@ impl<T: 'static> EventLoopProxy<T> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ActiveEventLoop {
     #[cfg(wayland_platform)]
     Wayland(wayland::ActiveEventLoop),

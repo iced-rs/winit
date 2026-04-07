@@ -3,16 +3,84 @@
 //! Winit has an OS requirement of macOS 10.11 or higher (same as Rust
 //! itself), and is regularly tested on macOS 10.14.
 //!
+//! ## Window initialization
+//!
 //! A lot of functionality expects the application to be ready before you
 //! start doing anything; this includes creating windows, fetching monitors,
 //! drawing, and so on, see issues [#2238], [#2051] and [#2087].
 //!
 //! If you encounter problems, you should try doing your initialization inside
-//! `Event::Resumed`.
+//! [`ApplicationHandler::resumed`].
 //!
 //! [#2238]: https://github.com/rust-windowing/winit/issues/2238
 //! [#2051]: https://github.com/rust-windowing/winit/issues/2051
 //! [#2087]: https://github.com/rust-windowing/winit/issues/2087
+//! [`ApplicationHandler::resumed`]: crate::application::ApplicationHandler::resumed
+//!
+//! ## Custom `NSApplicationDelegate`
+//!
+//! Winit usually handles everything related to the lifecycle events of the application. Sometimes,
+//! though, you might want to do more niche stuff, such as [handle when the user re-activates the
+//! application][reopen]. Such functionality is not exposed directly in Winit, since it would
+//! increase the API surface by quite a lot.
+//!
+//! [reopen]: https://developer.apple.com/documentation/appkit/nsapplicationdelegate/1428638-applicationshouldhandlereopen?language=objc
+//!
+//! Instead, Winit guarantees that it will not register an application delegate, so the solution is
+//! to register your own application delegate, as outlined in the following example (see
+//! `objc2-app-kit` for more detailed information).
+#![cfg_attr(target_os = "macos", doc = "```")]
+#![cfg_attr(not(target_os = "macos"), doc = "```ignore")]
+//! use objc2::rc::Retained;
+//! use objc2::runtime::ProtocolObject;
+//! use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
+//! use objc2_app_kit::{NSApplication, NSApplicationDelegate};
+//! use objc2_foundation::{NSArray, NSURL, MainThreadMarker, NSObject, NSObjectProtocol};
+//! use winit::event_loop::EventLoop;
+//!
+//! declare_class!(
+//!     struct AppDelegate;
+//!
+//!     unsafe impl ClassType for AppDelegate {
+//!         type Super = NSObject;
+//!         type Mutability = mutability::MainThreadOnly;
+//!         const NAME: &'static str = "MyAppDelegate";
+//!     }
+//!
+//!     impl DeclaredClass for AppDelegate {}
+//!
+//!     unsafe impl NSObjectProtocol for AppDelegate {}
+//!
+//!     unsafe impl NSApplicationDelegate for AppDelegate {
+//!         #[method(application:openURLs:)]
+//!         fn application_openURLs(&self, application: &NSApplication, urls: &NSArray<NSURL>) {
+//!             // Note: To specifically get `application:openURLs:` to work, you _might_
+//!             // have to bundle your application. This is not done in this example.
+//!             println!("open urls: {application:?}, {urls:?}");
+//!         }
+//!     }
+//! );
+//!
+//! impl AppDelegate {
+//!     fn new(mtm: MainThreadMarker) -> Retained<Self> {
+//!         unsafe { msg_send_id![super(mtm.alloc().set_ivars(())), init] }
+//!     }
+//! }
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let event_loop = EventLoop::new()?;
+//!
+//!     let mtm = MainThreadMarker::new().unwrap();
+//!     let delegate = AppDelegate::new(mtm);
+//!     // Important: Call `sharedApplication` after `EventLoop::new`,
+//!     // doing it before is not yet supported.
+//!     let app = NSApplication::sharedApplication(mtm);
+//!     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+//!
+//!     // event_loop.run_app(&mut my_app);
+//!     Ok(())
+//! }
+//! ```
 
 use std::os::raw::c_void;
 
@@ -95,11 +163,20 @@ pub trait WindowExtMacOS {
     /// Getter for the [`WindowExtMacOS::set_option_as_alt`].
     fn option_as_alt(&self) -> OptionAsAlt;
 
-    /// Disable the Menu Bar and Dock in Borderless Fullscreen mode. Useful for games.
+    /// Disable the Menu Bar and Dock in Simple or Borderless Fullscreen mode. Useful for games.
+    /// The effect is applied when [`WindowExtMacOS::set_simple_fullscreen`] or
+    /// [`Window::set_fullscreen`] is called.
     fn set_borderless_game(&self, borderless_game: bool);
 
     /// Getter for the [`WindowExtMacOS::set_borderless_game`].
     fn is_borderless_game(&self) -> bool;
+
+    /// Makes the titlebar bigger, effectively adding more space around the
+    /// window controls if the titlebar is invisible.
+    fn set_unified_titlebar(&self, unified_titlebar: bool);
+
+    /// Getter for the [`WindowExtMacOS::set_unified_titlebar`].
+    fn unified_titlebar(&self) -> bool;
 }
 
 impl WindowExtMacOS for Window {
@@ -182,6 +259,16 @@ impl WindowExtMacOS for Window {
     fn is_borderless_game(&self) -> bool {
         self.window.maybe_wait_on_main(|w| w.is_borderless_game())
     }
+
+    #[inline]
+    fn set_unified_titlebar(&self, unified_titlebar: bool) {
+        self.window.maybe_queue_on_main(move |w| w.set_unified_titlebar(unified_titlebar))
+    }
+
+    #[inline]
+    fn unified_titlebar(&self) -> bool {
+        self.window.maybe_wait_on_main(|w| w.unified_titlebar())
+    }
 }
 
 /// Corresponds to `NSApplicationActivationPolicy`.
@@ -234,6 +321,8 @@ pub trait WindowAttributesExtMacOS {
     fn with_option_as_alt(self, option_as_alt: OptionAsAlt) -> Self;
     /// See [`WindowExtMacOS::set_borderless_game`] for details on what this means if set.
     fn with_borderless_game(self, borderless_game: bool) -> Self;
+    /// See [`WindowExtMacOS::set_unified_titlebar`] for details on what this means if set.
+    fn with_unified_titlebar(self, unified_titlebar: bool) -> Self;
 }
 
 impl WindowAttributesExtMacOS for WindowAttributes {
@@ -306,6 +395,12 @@ impl WindowAttributesExtMacOS for WindowAttributes {
     #[inline]
     fn with_borderless_game(mut self, borderless_game: bool) -> Self {
         self.platform_specific.borderless_game = borderless_game;
+        self
+    }
+
+    #[inline]
+    fn with_unified_titlebar(mut self, unified_titlebar: bool) -> Self {
+        self.platform_specific.unified_titlebar = unified_titlebar;
         self
     }
 }

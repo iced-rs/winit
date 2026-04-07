@@ -884,7 +884,7 @@ impl Window {
     ///
     /// ## Platform-specific
     ///
-    /// - **iOS / Android / Web / Wayland / Orbital:** Always returns [`None`].
+    /// - **iOS / Android / Web / Orbital:** Always returns [`None`].
     #[inline]
     pub fn resize_increments(&self) -> Option<PhysicalSize<u32>> {
         let _span = tracing::debug_span!("winit::Window::resize_increments",).entered();
@@ -900,7 +900,6 @@ impl Window {
     ///
     /// - **macOS:** Increments are converted to logical size and then macOS rounds them to whole
     ///   numbers.
-    /// - **Wayland:** Not implemented.
     /// - **iOS / Android / Web / Orbital:** Unsupported.
     #[inline]
     pub fn set_resize_increments<S: Into<Size>>(&self, increments: Option<S>) {
@@ -1707,8 +1706,7 @@ pub enum CursorGrabMode {
     ///
     /// ## Platform-specific
     ///
-    /// - **X11 / Windows:** Not implemented. Always returns [`ExternalError::NotSupported`] for
-    ///   now.
+    /// - **X11:** Not implemented. Always returns [`ExternalError::NotSupported`] for now.
     /// - **iOS / Android:** Always returns an [`ExternalError::NotSupported`].
     Locked,
 }
@@ -1826,10 +1824,11 @@ pub enum WindowLevel {
 /// ## Platform-specific
 ///
 /// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
 #[non_exhaustive]
 pub enum ImePurpose {
     /// No special hints for the IME (default).
+    #[default]
     Normal,
     /// The IME is used for password input.
     Password,
@@ -1837,12 +1836,6 @@ pub enum ImePurpose {
     ///
     /// For example, that could alter OSK on Wayland to show extra buttons.
     Terminal,
-}
-
-impl Default for ImePurpose {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// An opaque token used to activate the [`Window`].
@@ -1864,14 +1857,14 @@ impl ActivationToken {
     /// won't get focused automatically), but won't yield any errors.
     ///
     /// To obtain a valid token, use
-    #[cfg_attr(any(x11_platform, wayland_platform, docsrs), doc = " [`request_activation_token`].")]
+    #[cfg_attr(
+        any(x11_platform, wayland_platform, docsrs),
+        doc = " [`request_activation_token`](crate::platform::startup_notify::WindowExtStartupNotify::request_activation_token)."
+    )]
     #[cfg_attr(
         not(any(x11_platform, wayland_platform, docsrs)),
         doc = " `request_activation_token`."
     )]
-    ///
-    #[rustfmt::skip]
-    /// [`request_activation_token`]: crate::platform::startup_notify::WindowExtStartupNotify::request_activation_token
     pub fn from_raw(token: String) -> Self {
         Self { token }
     }

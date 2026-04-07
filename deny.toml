@@ -40,8 +40,10 @@ multiple-versions = "deny"
 skip = [
     { crate = "raw-window-handle", reason = "we depend on multiple behind features" },
     { crate = "bitflags@1", reason = "the ecosystem is in the process of migrating" },
+    { crate = "rustix@0.38", reason = "the ecosystem is in the process of migrating" },
+    { crate = "linux-raw-sys@0.4", reason = "the ecosystem is in the process of migrating" },
 ]
-wildcards = "allow"                                                                        # at least until https://github.com/EmbarkStudios/cargo-deny/issues/241 is fixed
+wildcards = "allow" # at least until https://github.com/EmbarkStudios/cargo-deny/issues/241 is fixed
 
 [bans.build]
 include-archives = true
@@ -52,6 +54,10 @@ allow = [
     { path = "generate-bindings.sh", checksum = "268ec23248218d779e33853cdc60e2985e70214ff004716cd734270de1f6b561" },
 ]
 crate = "android-activity"
+
+[[bans.build.bypass]]
+allow-globs = ["ci/*", "githooks/*", "cargo.sh"]
+crate = "zerocopy"
 
 [[bans.build.bypass]]
 allow-globs = ["freetype2/*"]
