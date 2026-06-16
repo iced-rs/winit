@@ -14,7 +14,7 @@ use super::runner::{EventWrapper, Execution};
 use super::window::WindowId;
 use super::{backend, runner};
 use crate::event::{
-    DeviceId as RootDeviceId, ElementState, Event, KeyEvent, Touch, TouchPhase, WindowEvent,
+    DeviceId as RootDeviceId, ElementState, Event, Ime, KeyEvent, Touch, TouchPhase, WindowEvent,
 };
 use crate::event_loop::{ControlFlow, DeviceEvents};
 use crate::keyboard::ModifiersState;
@@ -586,6 +586,46 @@ impl ActiveEventLoop {
         canvas.on_animation_frame(move || runner.request_redraw(RootWindowId(id)));
 
         canvas.on_context_menu();
+
+        canvas.on_composition_start({
+            let runner = self.runner.clone();
+            move |data, position| {
+                if let Some(data) = data {
+                    runner.send_event(Event::WindowEvent {
+                        window_id: RootWindowId(id),
+                        event: WindowEvent::Ime(Ime::Preedit(data, position)),
+                    });
+                }
+            }
+        });
+
+        canvas.on_composition_end({
+            let runner = self.runner.clone();
+            move |data| {
+                if let Some(data) = data {
+                    runner.send_event(Event::WindowEvent {
+                        window_id: RootWindowId(id),
+                        event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                    });
+                    runner.send_event(Event::WindowEvent {
+                        window_id: RootWindowId(id),
+                        event: WindowEvent::Ime(Ime::Commit(data)),
+                    });
+                }
+            }
+        });
+
+        canvas.on_text_update({
+            let runner = self.runner.clone();
+            move |data, position| {
+                if let Some(data) = data {
+                    runner.send_event(Event::WindowEvent {
+                        window_id: RootWindowId(id),
+                        event: WindowEvent::Ime(Ime::Preedit(data, position)),
+                    });
+                }
+            }
+        });
     }
 
     pub fn available_monitors(&self) -> VecDequeIter<MonitorHandle> {

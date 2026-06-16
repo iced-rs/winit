@@ -3,12 +3,13 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use js_sys::{Array, Function, Reflect};
 use smol_str::SmolStr;
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
-    CssStyleDeclaration, Document, Event, FocusEvent, HtmlCanvasElement, KeyboardEvent,
-    PointerEvent, WheelEvent,
+    CompositionEvent, CssStyleDeclaration, Document, Event, EventTarget, FocusEvent,
+    HtmlCanvasElement, KeyboardEvent, PointerEvent, WheelEvent,
 };
 
 use crate::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
@@ -34,6 +35,7 @@ pub struct Canvas {
     id: WindowId,
     pub has_focus: Rc<Cell<bool>>,
     pub prevent_default: Rc<Cell<bool>>,
+    pub composing: Rc<Cell<bool>>,
     pub is_intersecting: Option<bool>,
     on_touch_start: Option<EventListenerHandle<dyn FnMut(Event)>>,
     on_focus: Option<EventListenerHandle<dyn FnMut(FocusEvent)>>,
@@ -48,6 +50,9 @@ pub struct Canvas {
     animation_frame_handler: AnimationFrameHandler,
     on_touch_end: Option<EventListenerHandle<dyn FnMut(Event)>>,
     on_context_menu: Option<EventListenerHandle<dyn FnMut(PointerEvent)>>,
+    on_composition_start: Option<EventListenerHandle<dyn FnMut(CompositionEvent)>>,
+    on_composition_end: Option<EventListenerHandle<dyn FnMut(CompositionEvent)>>,
+    on_text_update: Option<EventListenerHandle<dyn FnMut(Event)>>,
     pub cursor: CursorHandler,
 }
 
@@ -58,6 +63,13 @@ pub struct Common {
     /// the DPI factor is maintained. Note: this is read-only because we use a pointer to this
     /// for [`WindowHandle`][rwh_06::WindowHandle].
     raw: Rc<HtmlCanvasElement>,
+    /// Owned `EditContext` instance, if the browser supports it.
+    /// When `Some`, IME events are routed through
+    /// it instead of through canvas keyboard events, which lets
+    /// the OS IME composition (CJK, Indic, etc.) hand committed
+    /// text into a wgpu canvas. `None` on non-Chromium browsers
+    /// — IME is unavailable there.
+    raw_edit_context: Option<Rc<JsValue>>,
     style: Style,
     old_size: Rc<Cell<PhysicalSize<u32>>>,
     current_size: Rc<Cell<PhysicalSize<u32>>>,
@@ -112,10 +124,21 @@ impl Canvas {
 
         let cursor = CursorHandler::new(main_thread, canvas.clone(), style.clone());
 
+        // Optional EditContext for IME, for browser that support it. On other browsers,
+        // IME is simply not available.
+        let edit_context = Reflect::get(&window, &JsValue::from_str("EditContext"))
+            .ok()
+            .filter(|v| !v.is_undefined())
+            .and_then(|ctor| {
+                let ctor: &Function = ctor.unchecked_ref();
+                Reflect::construct(ctor, &Array::new()).ok()
+            });
+
         let common = Common {
             window: window.clone(),
             document: document.clone(),
             raw: Rc::new(canvas.clone()),
+            raw_edit_context: edit_context.map(Rc::new),
             style,
             old_size: Rc::default(),
             current_size: Rc::default(),
@@ -154,6 +177,7 @@ impl Canvas {
             id,
             has_focus: Rc::new(Cell::new(false)),
             prevent_default: Rc::new(Cell::new(attr.platform_specific.prevent_default)),
+            composing: Rc::new(Cell::new(false)),
             is_intersecting: None,
             on_touch_start: None,
             on_blur: None,
@@ -168,6 +192,9 @@ impl Canvas {
             animation_frame_handler: AnimationFrameHandler::new(window),
             on_touch_end: None,
             on_context_menu: None,
+            on_composition_start: None,
+            on_composition_end: None,
+            on_text_update: None,
             cursor,
         })
     }
@@ -274,8 +301,12 @@ impl Canvas {
         F: 'static + FnMut(PhysicalKey, Key, Option<SmolStr>, KeyLocation, bool, ModifiersState),
     {
         let prevent_default = Rc::clone(&self.prevent_default);
+        let composing = Rc::clone(&self.composing);
         self.on_keyboard_release =
             Some(self.common.add_event("keyup", move |event: KeyboardEvent| {
+                if composing.get() || is_ime_composing(&event) {
+                    return;
+                }
                 if prevent_default.get() {
                     event.prevent_default();
                 }
@@ -297,8 +328,13 @@ impl Canvas {
         F: 'static + FnMut(PhysicalKey, Key, Option<SmolStr>, KeyLocation, bool, ModifiersState),
     {
         let prevent_default = Rc::clone(&self.prevent_default);
+        let composing = Rc::clone(&self.composing);
         self.on_keyboard_press =
             Some(self.common.add_event("keydown", move |event: KeyboardEvent| {
+                let suppress = composing.get() || is_ime_composing(&event);
+                if suppress {
+                    return;
+                }
                 if prevent_default.get() {
                     event.prevent_default();
                 }
@@ -441,6 +477,135 @@ impl Canvas {
             }));
     }
 
+    pub(crate) fn on_composition_start<F>(&mut self, mut handler: F)
+    where
+        F: 'static + FnMut(Option<String>, Option<(usize, usize)>),
+    {
+        let prevent_default = Rc::clone(&self.prevent_default);
+        let composing = Rc::clone(&self.composing);
+        self.on_composition_start =
+            self.common.add_ime_event("compositionstart", move |event: CompositionEvent| {
+                composing.set(true);
+                if prevent_default.get() {
+                    event.prevent_default();
+                }
+                handler(event.data(), None);
+            });
+    }
+
+    pub(crate) fn on_composition_end<F>(&mut self, mut handler: F)
+    where
+        F: 'static + FnMut(Option<String>),
+    {
+        let prevent_default = Rc::clone(&self.prevent_default);
+        let composing = Rc::clone(&self.composing);
+        self.on_composition_end =
+            self.common.add_ime_event("compositionend", move |event: CompositionEvent| {
+                composing.set(false);
+                if prevent_default.get() {
+                    event.prevent_default();
+                }
+                handler(event.data());
+            });
+    }
+
+    pub(crate) fn on_text_update<F>(&mut self, mut handler: F)
+    where
+        F: 'static + FnMut(Option<String>, Option<(usize, usize)>),
+    {
+        let prevent_default = Rc::clone(&self.prevent_default);
+        self.on_text_update = self.common.add_ime_event("textupdate", move |event: Event| {
+            if prevent_default.get() {
+                event.prevent_default();
+            }
+            let text_update_event = JsValue::from(event);
+            let text = Reflect::get(&text_update_event, &JsValue::from_str("text"))
+                .ok()
+                .and_then(|v| v.as_string());
+            handler(text, None);
+        });
+    }
+
+    pub(crate) fn is_support_edit_context(&self) -> bool {
+        self.common.raw_edit_context.is_some()
+    }
+
+    pub(crate) fn enable_edit_context(&self) {
+        if let Some(raw_edit_context) = &self.common.raw_edit_context {
+            let canvas_js = JsValue::from(self.common.raw.deref());
+            let _ = Reflect::set(&canvas_js, &JsValue::from_str("editContext"), raw_edit_context);
+        }
+    }
+
+    pub(crate) fn disable_edit_context(&self) {
+        if self.common.raw_edit_context.is_none() {
+            return;
+        }
+        let canvas_js = JsValue::from(self.common.raw.deref());
+        let _ = Reflect::set(&canvas_js, &JsValue::from_str("editContext"), &JsValue::NULL);
+    }
+
+    pub(crate) fn update_character_bounds(&self, x: f64, y: f64, width: f64, height: f64) {
+        const BOUNDS_RANGE: usize = 64;
+
+        let Some(edit_context) = self.common.raw_edit_context.as_ref() else {
+            return;
+        };
+        let canvas_rect = self.common.raw.get_bounding_client_rect();
+        let vp_x = canvas_rect.x() + x;
+        let vp_y = canvas_rect.y() + y;
+        let edit_context_js: &JsValue = edit_context.deref();
+
+        // Chromium positions the IME candidate window primarily off
+        // `updateSelectionBounds`, then `updateControlBounds`, then
+        // (only if both are unset) the per-character bounds set via
+        // `updateCharacterBounds`. We push all three so the candidate
+        // window lands next to the caret regardless of which one the
+        // browser version prefers.
+        let caret_rect = match web_sys::DomRect::new_with_x_and_y_and_width_and_height(
+            vp_x, vp_y, width, height,
+        ) {
+            Ok(rect) => rect,
+            Err(_) => return,
+        };
+
+        if let Ok(f) = Reflect::get(edit_context_js, &JsValue::from_str("updateSelectionBounds")) {
+            let f: &Function = f.unchecked_ref();
+            let _ = f.call1(edit_context_js, &caret_rect);
+        }
+
+        let control_rect = match web_sys::DomRect::new_with_x_and_y_and_width_and_height(
+            canvas_rect.x(),
+            canvas_rect.y(),
+            canvas_rect.width(),
+            canvas_rect.height(),
+        ) {
+            Ok(rect) => rect,
+            Err(_) => return,
+        };
+        if let Ok(f) = Reflect::get(edit_context_js, &JsValue::from_str("updateControlBounds")) {
+            let f: &Function = f.unchecked_ref();
+            let _ = f.call1(edit_context_js, &control_rect);
+        }
+
+        let bounds = Array::new();
+        for _ in 0..BOUNDS_RANGE {
+            let Ok(rect) =
+                web_sys::DomRect::new_with_x_and_y_and_width_and_height(vp_x, vp_y, width, height)
+            else {
+                return;
+            };
+            bounds.push(&rect);
+        }
+        let Ok(update_fn) =
+            Reflect::get(edit_context_js, &JsValue::from_str("updateCharacterBounds"))
+        else {
+            return;
+        };
+        let update_fn: &Function = update_fn.unchecked_ref();
+        let _ = update_fn.call2(edit_context_js, &JsValue::from_f64(0.0), &bounds);
+    }
+
     pub fn request_fullscreen(&self) {
         fullscreen::request_fullscreen(self.document(), self.raw());
     }
@@ -515,6 +680,9 @@ impl Canvas {
         self.animation_frame_handler.cancel();
         self.on_touch_end = None;
         self.on_context_menu = None;
+        self.on_composition_start = None;
+        self.on_composition_end = None;
+        self.on_text_update = None;
     }
 }
 
@@ -529,6 +697,20 @@ impl Common {
         F: 'static + FnMut(E),
     {
         EventListenerHandle::new(self.raw.deref().clone(), event_name, Closure::new(handler))
+    }
+
+    pub fn add_ime_event<E, F>(
+        &self,
+        event_name: &'static str,
+        handler: F,
+    ) -> Option<EventListenerHandle<dyn FnMut(E)>>
+    where
+        E: 'static + AsRef<web_sys::Event> + wasm_bindgen::convert::FromWasmAbi,
+        F: 'static + FnMut(E),
+    {
+        let edit_context = self.raw_edit_context.as_ref()?.deref().clone();
+        let target: EventTarget = edit_context.unchecked_into();
+        Some(EventListenerHandle::new(target, event_name, Closure::new(handler)))
     }
 
     pub fn raw(&self) -> &HtmlCanvasElement {
@@ -562,4 +744,8 @@ impl Style {
     pub(crate) fn set(&self, property: &str, value: &str) {
         self.write.set_property(property, value).expect("Property is read only");
     }
+}
+
+fn is_ime_composing(event: &KeyboardEvent) -> bool {
+    event.is_composing() || event.key_code() == 229
 }

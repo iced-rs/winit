@@ -1275,7 +1275,8 @@ impl Window {
     /// - **macOS:** IME must be enabled to receive text-input where dead-key sequences are
     ///   combined.
     /// - **iOS / Android:** This will show / hide the soft keyboard.
-    /// - **Web / Orbital:** Unsupported.
+    /// - **Web**: Supported on browsers implementing the [EditContext API](https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API).
+    /// - **Orbital:** Unsupported.
     /// - **X11**: Enabling IME will disable dead keys reporting during compose.
     ///
     /// [`Ime`]: crate::event::WindowEvent::Ime

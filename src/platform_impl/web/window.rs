@@ -324,13 +324,29 @@ impl Inner {
     }
 
     #[inline]
-    pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {
-        // Currently a no-op as it does not seem there is good support for this on web
+    pub fn set_ime_cursor_area(&self, position: Position, size: Size) {
+        let scale = self.scale_factor();
+        let position = position.to_logical::<f64>(scale);
+        let size = size.to_logical::<f64>(scale);
+        self.canvas.borrow().update_character_bounds(
+            position.x,
+            position.y,
+            size.width,
+            size.height,
+        );
     }
 
     #[inline]
-    pub fn set_ime_allowed(&self, _allowed: bool) {
-        // Currently not implemented
+    pub fn set_ime_allowed(&self, allowed: bool) {
+        let canvas = self.canvas.borrow();
+        if !canvas.is_support_edit_context() {
+            return;
+        }
+        if allowed {
+            canvas.enable_edit_context();
+        } else {
+            canvas.disable_edit_context();
+        }
     }
 
     #[inline]
