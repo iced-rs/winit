@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use sctk::reexports::client::globals::{BindError, GlobalError};
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
-use sctk::reexports::client::{self, ConnectError, DispatchError, Proxy};
+use sctk::reexports::client::{ConnectError, DispatchError, Proxy};
 
 pub(super) use crate::cursor::OnlyCursorImage as CustomCursor;
 use crate::dpi::{LogicalSize, PhysicalSize};
@@ -37,9 +37,6 @@ pub enum WaylandError {
 
     /// Calloop error.
     Calloop(calloop::Error),
-
-    /// Wayland
-    Wire(client::backend::WaylandError),
 }
 
 impl Display for WaylandError {
@@ -50,7 +47,6 @@ impl Display for WaylandError {
             WaylandError::Bind(error) => error.fmt(f),
             WaylandError::Dispatch(error) => error.fmt(f),
             WaylandError::Calloop(error) => error.fmt(f),
-            WaylandError::Wire(error) => error.fmt(f),
         }
     }
 }

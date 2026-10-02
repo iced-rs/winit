@@ -635,7 +635,7 @@ impl Window {
 
     #[inline]
     pub fn current_monitor(&self) -> Option<MonitorHandle> {
-        let data = self.window.wl_surface().data::<SurfaceData>()?;
+        let data = self.window.wl_surface().data::<SurfaceData<()>>()?;
         data.outputs().next().map(MonitorHandle::new)
     }
 
