@@ -86,6 +86,7 @@ pub struct MonitorHandle(HMONITOR);
 // https://github.com/retep998/winapi-rs/issues/396
 
 unsafe impl Send for MonitorHandle {}
+unsafe impl Sync for MonitorHandle {}
 
 unsafe extern "system" fn monitor_enum_proc(
     hmonitor: HMONITOR,
