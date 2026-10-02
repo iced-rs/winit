@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{io, mem, ptr};
 
 use crate::utils::Lazy;
-use windows_sys::core::{HRESULT, PCWSTR};
-use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND, POINT, RECT};
+use windows_sys::core::{BOOL, HRESULT, PCWSTR};
+use windows_sys::Win32::Foundation::{HANDLE, HMODULE, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, HMONITOR};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
@@ -196,7 +196,7 @@ pub(super) fn get_function_impl(library: &str, function: &str) -> Option<*const 
 
     // Library names we will use are ASCII so we can use the A version to avoid string conversion.
     let module = unsafe { LoadLibraryA(library.as_ptr()) };
-    if module == 0 {
+    if module.is_null() {
         return None;
     }
 

@@ -48,10 +48,7 @@ pub fn initialize(app: &NSApplication) {
         Some(sel!(hideOtherApplications:)),
         Some(KeyEquivalent {
             key: ns_string!("h"),
-            masks: Some(
-                NSEventModifierFlags::NSEventModifierFlagOption
-                    | NSEventModifierFlags::NSEventModifierFlagCommand,
-            ),
+            masks: Some(NSEventModifierFlags::Option | NSEventModifierFlags::Command),
         }),
     );
 
@@ -82,7 +79,7 @@ pub fn initialize(app: &NSApplication) {
     app_menu.addItem(&quit_item);
     app_menu_item.setSubmenu(Some(&app_menu));
 
-    unsafe { app.setServicesMenu(Some(&services_menu)) };
+    app.setServicesMenu(Some(&services_menu));
     app.setMainMenu(Some(&menubar));
 }
 

@@ -29,11 +29,9 @@ extern "C" fn send_event(app: &NSApplication, sel: Sel, event: &NSEvent) {
     // For posterity, there are some undocumented event types
     // (https://github.com/servo/cocoa-rs/issues/155)
     // but that doesn't really matter here.
-    let event_type = unsafe { event.r#type() };
-    let modifier_flags = unsafe { event.modifierFlags() };
-    if event_type == NSEventType::KeyUp
-        && modifier_flags.contains(NSEventModifierFlags::NSEventModifierFlagCommand)
-    {
+    let event_type = event.r#type();
+    let modifier_flags = event.modifierFlags();
+    if event_type == NSEventType::KeyUp && modifier_flags.contains(NSEventModifierFlags::Command) {
         if let Some(key_window) = app.keyWindow() {
             key_window.sendEvent(event);
         }
@@ -101,15 +99,15 @@ pub(crate) fn override_send_event(global_app: &NSApplication) {
 }
 
 fn maybe_dispatch_device_event(delegate: &ApplicationDelegate, event: &NSEvent) {
-    let event_type = unsafe { event.r#type() };
+    let event_type = event.r#type();
     #[allow(non_upper_case_globals)]
     match event_type {
         NSEventType::MouseMoved
         | NSEventType::LeftMouseDragged
         | NSEventType::OtherMouseDragged
         | NSEventType::RightMouseDragged => {
-            let delta_x = unsafe { event.deltaX() } as f64;
-            let delta_y = unsafe { event.deltaY() } as f64;
+            let delta_x = event.deltaX() as f64;
+            let delta_y = event.deltaY() as f64;
 
             if delta_x != 0.0 {
                 delegate.maybe_queue_device_event(DeviceEvent::Motion { axis: 0, value: delta_x });
@@ -127,13 +125,13 @@ fn maybe_dispatch_device_event(delegate: &ApplicationDelegate, event: &NSEvent) 
         },
         NSEventType::LeftMouseDown | NSEventType::RightMouseDown | NSEventType::OtherMouseDown => {
             delegate.maybe_queue_device_event(DeviceEvent::Button {
-                button: unsafe { event.buttonNumber() } as u32,
+                button: event.buttonNumber() as u32,
                 state: ElementState::Pressed,
             });
         },
         NSEventType::LeftMouseUp | NSEventType::RightMouseUp | NSEventType::OtherMouseUp => {
             delegate.maybe_queue_device_event(DeviceEvent::Button {
-                button: unsafe { event.buttonNumber() } as u32,
+                button: event.buttonNumber() as u32,
                 state: ElementState::Released,
             });
         },
@@ -144,7 +142,7 @@ fn maybe_dispatch_device_event(delegate: &ApplicationDelegate, event: &NSEvent) 
 #[cfg(test)]
 mod tests {
     use objc2::rc::Retained;
-    use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
+    use objc2::{define_class, msg_send, MainThreadOnly};
 
     use super::*;
 
@@ -170,26 +168,21 @@ mod tests {
     fn test_custom_class() {
         let Some(_mtm) = MainThreadMarker::new() else { return };
 
-        declare_class!(
+        define_class!(
+            #[unsafe(super(NSApplication))]
+            #[thread_kind = MainThreadOnly]
+            #[name = "TestApplication"]
             struct TestApplication;
 
-            unsafe impl ClassType for TestApplication {
-                type Super = NSApplication;
-                type Mutability = mutability::MainThreadOnly;
-                const NAME: &'static str = "TestApplication";
-            }
-
-            impl DeclaredClass for TestApplication {}
-
-            unsafe impl TestApplication {
-                #[method(sendEvent:)]
+            impl TestApplication {
+                #[unsafe(method(sendEvent:))]
                 fn send_event(&self, _event: &NSEvent) {
                     todo!()
                 }
             }
         );
 
-        let app: Retained<TestApplication> = unsafe { msg_send_id![TestApplication::class(), new] };
+        let app: Retained<TestApplication> = unsafe { msg_send![TestApplication::class(), new] };
         override_send_event(&app);
     }
 }

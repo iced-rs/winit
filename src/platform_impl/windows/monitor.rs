@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::hash::Hash;
 use std::{io, mem, ptr};
 
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
+use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, EnumDisplaySettingsExW, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, DEVMODEW, DM_BITSPERPEL, DM_DISPLAYFREQUENCY, DM_PELSHEIGHT, DM_PELSWIDTH,
@@ -101,7 +102,7 @@ pub fn available_monitors() -> VecDeque<MonitorHandle> {
     let mut monitors: VecDeque<MonitorHandle> = VecDeque::new();
     unsafe {
         EnumDisplayMonitors(
-            0,
+            ptr::null_mut(),
             ptr::null(),
             Some(monitor_enum_proc),
             &mut monitors as *mut _ as LPARAM,

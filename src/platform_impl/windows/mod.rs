@@ -104,7 +104,7 @@ unsafe impl Sync for WindowId {}
 
 impl WindowId {
     pub const fn dummy() -> Self {
-        WindowId(0)
+        WindowId(std::ptr::null_mut())
     }
 }
 

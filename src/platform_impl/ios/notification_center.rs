@@ -17,11 +17,14 @@ pub fn create_observer(
         handler(unsafe { notification.as_ref() });
     });
     unsafe {
-        center.addObserverForName_object_queue_usingBlock(
+        let observer = center.addObserverForName_object_queue_usingBlock(
             Some(name),
             None, // No sender filter
             None, // No queue, run on posting thread (i.e. main thread)
             &block,
-        )
+        );
+        // The returned opaque observer is an `NSObject`; reinterpret the type-erased
+        // protocol object as such (same pointer, only the type tag changes).
+        Retained::cast_unchecked::<NSObject>(observer)
     }
 }

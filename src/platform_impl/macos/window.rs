@@ -1,9 +1,10 @@
 #![allow(clippy::unnecessary_cast)]
 
+use dispatch2::MainThreadBound;
 use objc2::rc::{autoreleasepool, Retained};
-use objc2::{declare_class, mutability, ClassType, DeclaredClass};
+use objc2::{define_class, MainThreadOnly, Message};
 use objc2_app_kit::{NSResponder, NSWindow};
-use objc2_foundation::{MainThreadBound, MainThreadMarker, NSObject};
+use objc2_foundation::{MainThreadMarker, NSObject};
 
 use super::event_loop::ActiveEventLoop;
 use super::window_delegate::WindowDelegate;
@@ -91,27 +92,21 @@ impl From<u64> for WindowId {
     }
 }
 
-declare_class!(
+define_class!(
+    #[unsafe(super(NSWindow, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WinitWindow"]
     #[derive(Debug)]
     pub struct WinitWindow;
 
-    unsafe impl ClassType for WinitWindow {
-        #[inherits(NSResponder, NSObject)]
-        type Super = NSWindow;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "WinitWindow";
-    }
-
-    impl DeclaredClass for WinitWindow {}
-
-    unsafe impl WinitWindow {
-        #[method(canBecomeMainWindow)]
+    impl WinitWindow {
+        #[unsafe(method(canBecomeMainWindow))]
         fn can_become_main_window(&self) -> bool {
             trace_scope!("canBecomeMainWindow");
             true
         }
 
-        #[method(canBecomeKeyWindow)]
+        #[unsafe(method(canBecomeKeyWindow))]
         fn can_become_key_window(&self) -> bool {
             trace_scope!("canBecomeKeyWindow");
             true

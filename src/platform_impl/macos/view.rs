@@ -3,9 +3,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
 
-use objc2::rc::{Retained, WeakId};
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventPhase, NSResponder, NSTextInputClient,
     NSTrackingRectTag, NSView, NSViewFrameDidChangeNotification,
@@ -135,34 +135,27 @@ pub struct ViewState {
     accepts_first_mouse: bool,
 
     // Weak reference because the window keeps a strong reference to the view
-    _ns_window: WeakId<WinitWindow>,
+    _ns_window: Weak<WinitWindow>,
 
     /// The state of the `Option` as `Alt`.
     option_as_alt: Cell<OptionAsAlt>,
 }
 
-declare_class!(
+define_class!(
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WinitView"]
+    #[ivars = ViewState]
     pub(super) struct WinitView;
 
-    unsafe impl ClassType for WinitView {
-        #[inherits(NSResponder, NSObject)]
-        type Super = NSView;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "WinitView";
-    }
-
-    impl DeclaredClass for WinitView {
-        type Ivars = ViewState;
-    }
-
-    unsafe impl WinitView {
-        #[method(isFlipped)]
+    impl WinitView {
+        #[unsafe(method(isFlipped))]
         fn is_flipped(&self) -> bool {
             // `winit` uses the upper-left corner as the origin.
             true
         }
 
-        #[method(viewDidMoveToWindow)]
+        #[unsafe(method(viewDidMoveToWindow))]
         fn view_did_move_to_window(&self) {
             trace_scope!("viewDidMoveToWindow");
             if let Some(tracking_rect) = self.ivars().tracking_rect.take() {
@@ -177,7 +170,7 @@ declare_class!(
             self.ivars().tracking_rect.set(Some(tracking_rect));
         }
 
-        #[method(frameDidChange:)]
+        #[unsafe(method(frameDidChange:))]
         fn frame_did_change(&self, _event: &NSEvent) {
             trace_scope!("frameDidChange:");
             if let Some(tracking_rect) = self.ivars().tracking_rect.take() {
@@ -199,7 +192,7 @@ declare_class!(
             self.queue_event(WindowEvent::Resized(size));
         }
 
-        #[method(drawRect:)]
+        #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _rect: NSRect) {
             trace_scope!("drawRect:");
 
@@ -211,7 +204,7 @@ declare_class!(
             // This is a direct subclass of NSView, no need to call superclass' drawRect:
         }
 
-        #[method(acceptsFirstResponder)]
+        #[unsafe(method(acceptsFirstResponder))]
         fn accepts_first_responder(&self) -> bool {
             trace_scope!("acceptsFirstResponder");
             true
@@ -220,13 +213,13 @@ declare_class!(
         // This is necessary to prevent a beefy terminal error on MacBook Pros:
         // IMKInputSession [0x7fc573576ff0 presentFunctionRowItemTextInputViewWithEndpoint:completionHandler:] : [self textInputContext]=0x7fc573558e10 *NO* NSRemoteViewController to client, NSError=Error Domain=NSCocoaErrorDomain Code=4099 "The connection from pid 0 was invalidated from this process." UserInfo={NSDebugDescription=The connection from pid 0 was invalidated from this process.}, com.apple.inputmethod.EmojiFunctionRowItem
         // TODO: Add an API extension for using `NSTouchBar`
-        #[method_id(touchBar)]
+        #[unsafe(method_id(touchBar))]
         fn touch_bar(&self) -> Option<Retained<NSObject>> {
             trace_scope!("touchBar");
             None
         }
 
-        #[method(resetCursorRects)]
+        #[unsafe(method(resetCursorRects))]
         fn reset_cursor_rects(&self) {
             trace_scope!("resetCursorRects");
             let bounds = self.bounds();
@@ -241,13 +234,13 @@ declare_class!(
     }
 
     unsafe impl NSTextInputClient for WinitView {
-        #[method(hasMarkedText)]
+        #[unsafe(method(hasMarkedText))]
         fn has_marked_text(&self) -> bool {
             trace_scope!("hasMarkedText");
             self.ivars().marked_text.borrow().length() > 0
         }
 
-        #[method(markedRange)]
+        #[unsafe(method(markedRange))]
         fn marked_range(&self) -> NSRange {
             trace_scope!("markedRange");
             let length = self.ivars().marked_text.borrow().length();
@@ -259,14 +252,14 @@ declare_class!(
             }
         }
 
-        #[method(selectedRange)]
+        #[unsafe(method(selectedRange))]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
             // Documented to return `{NSNotFound, 0}` if there is no selection.
             NSRange::new(NSNotFound as NSUInteger, 0)
         }
 
-        #[method(setMarkedText:selectedRange:replacementRange:)]
+        #[unsafe(method(setMarkedText:selectedRange:replacementRange:))]
         fn set_marked_text(
             &self,
             string: &NSObject,
@@ -277,7 +270,7 @@ declare_class!(
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
-            let (marked_text, string) = if string.is_kind_of::<NSAttributedString>() {
+            let (marked_text, string) = if string.isKindOfClass(NSAttributedString::class()) {
                 let string: *const NSObject = string;
                 let string: *const NSAttributedString = string.cast();
                 let string = unsafe { &*string };
@@ -304,7 +297,7 @@ declare_class!(
                 self.queue_event(WindowEvent::Ime(Ime::Enabled));
             }
 
-            if unsafe { self.hasMarkedText() } {
+            if self.hasMarkedText() {
                 self.ivars().ime_state.set(ImeState::Preedit);
             } else {
                 // In case the preedit was cleared, set IME into the Ground state.
@@ -323,8 +316,8 @@ declare_class!(
                 let location = selected_range.location.min(len);
                 let end = selected_range.end().min(len);
                 // Convert the selected range from UTF-16 indices to UTF-8 indices.
-                let sub_string_a = unsafe { string.substringToIndex(location) };
-                let sub_string_b = unsafe { string.substringToIndex(end) };
+                let sub_string_a = string.substringToIndex(location);
+                let sub_string_b = string.substringToIndex(end);
                 let lowerbound_utf8 = sub_string_a.len();
                 let upperbound_utf8 = sub_string_b.len();
                 Some((lowerbound_utf8, upperbound_utf8))
@@ -334,7 +327,7 @@ declare_class!(
             self.queue_event(WindowEvent::Ime(Ime::Preedit(string.to_string(), cursor_range)));
         }
 
-        #[method(unmarkText)]
+        #[unsafe(method(unmarkText))]
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
             *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
@@ -351,13 +344,13 @@ declare_class!(
             }
         }
 
-        #[method_id(validAttributesForMarkedText)]
+        #[unsafe(method_id(validAttributesForMarkedText))]
         fn valid_attributes_for_marked_text(&self) -> Retained<NSArray<NSAttributedStringKey>> {
             trace_scope!("validAttributesForMarkedText");
             NSArray::new()
         }
 
-        #[method_id(attributedSubstringForProposedRange:actualRange:)]
+        #[unsafe(method_id(attributedSubstringForProposedRange:actualRange:))]
         fn attributed_substring_for_proposed_range(
             &self,
             _range: NSRange,
@@ -367,13 +360,13 @@ declare_class!(
             None
         }
 
-        #[method(characterIndexForPoint:)]
+        #[unsafe(method(characterIndexForPoint:))]
         fn character_index_for_point(&self, _point: NSPoint) -> NSUInteger {
             trace_scope!("characterIndexForPoint:");
             0
         }
 
-        #[method(firstRectForCharacterRange:actualRange:)]
+        #[unsafe(method(firstRectForCharacterRange:actualRange:))]
         fn first_rect_for_character_range(
             &self,
             _range: NSRange,
@@ -389,13 +382,13 @@ declare_class!(
                 .convertRectToScreen(self.convertRect_toView(rect, None))
         }
 
-        #[method(insertText:replacementRange:)]
+        #[unsafe(method(insertText:replacementRange:))]
         fn insert_text(&self, string: &NSObject, _replacement_range: NSRange) {
             // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("insertText:replacementRange:");
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
-            let string = if string.is_kind_of::<NSAttributedString>() {
+            let string = if string.isKindOfClass(NSAttributedString::class()) {
                 let string: *const NSObject = string;
                 let string: *const NSAttributedString = string.cast();
                 unsafe { &*string }.string().to_string()
@@ -408,7 +401,7 @@ declare_class!(
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
 
             // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+            if self.hasMarkedText() && self.is_ime_enabled() && !is_control {
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
@@ -417,7 +410,7 @@ declare_class!(
 
         // Basically, we're sent this message whenever a keyboard event that doesn't generate a "human
         // readable" character happens, i.e. newlines, tabs, and Ctrl+C.
-        #[method(doCommandBySelector:)]
+        #[unsafe(method(doCommandBySelector:))]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
             // We shouldn't forward any character from just committed text, since we'll end up sending
@@ -429,7 +422,7 @@ declare_class!(
 
             self.ivars().forward_key_to_app.set(true);
 
-            if unsafe { self.hasMarkedText() } && self.ivars().ime_state.get() == ImeState::Preedit
+            if self.hasMarkedText() && self.ivars().ime_state.get() == ImeState::Preedit
             {
                 // Leave preedit so that we also report the key-up for this key.
                 self.ivars().ime_state.set(ImeState::Ground);
@@ -437,8 +430,8 @@ declare_class!(
         }
     }
 
-    unsafe impl WinitView {
-        #[method(keyDown:)]
+    impl WinitView {
+        #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
             trace_scope!("keyDown:");
             {
@@ -465,7 +458,7 @@ declare_class!(
             // is not handled by IME and should be handled by the application)
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
-                unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                self.interpretKeyEvents(&events_for_nsview);
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -488,7 +481,7 @@ declare_class!(
             };
 
             if !had_ime_input || self.ivars().forward_key_to_app.get() {
-                let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
+                let key_event = create_key_event(&event, true, event.isARepeat());
                 self.queue_event(WindowEvent::KeyboardInput {
                     device_id: DEVICE_ID,
                     event: key_event,
@@ -497,7 +490,7 @@ declare_class!(
             }
         }
 
-        #[method(keyUp:)]
+        #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) {
             trace_scope!("keyUp:");
 
@@ -517,14 +510,14 @@ declare_class!(
             }
         }
 
-        #[method(flagsChanged:)]
+        #[unsafe(method(flagsChanged:))]
         fn flags_changed(&self, event: &NSEvent) {
             trace_scope!("flagsChanged:");
 
             self.update_modifiers(event, true);
         }
 
-        #[method(insertTab:)]
+        #[unsafe(method(insertTab:))]
         fn insert_tab(&self, _sender: Option<&AnyObject>) {
             trace_scope!("insertTab:");
             let window = self.window();
@@ -535,7 +528,7 @@ declare_class!(
             }
         }
 
-        #[method(insertBackTab:)]
+        #[unsafe(method(insertBackTab:))]
         fn insert_back_tab(&self, _sender: Option<&AnyObject>) {
             trace_scope!("insertBackTab:");
             let window = self.window();
@@ -548,7 +541,7 @@ declare_class!(
 
         // Allows us to receive Cmd-. (the shortcut for closing a dialog)
         // https://bugs.eclipse.org/bugs/show_bug.cgi?id=300620#c6
-        #[method(cancelOperation:)]
+        #[unsafe(method(cancelOperation:))]
         fn cancel_operation(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
             trace_scope!("cancelOperation:");
@@ -558,7 +551,7 @@ declare_class!(
                 .expect("could not find current event");
 
             self.update_modifiers(&event, false);
-            let event = create_key_event(&event, true, unsafe { event.isARepeat() });
+            let event = create_key_event(&event, true, event.isARepeat());
 
             self.queue_event(WindowEvent::KeyboardInput {
                 device_id: DEVICE_ID,
@@ -578,42 +571,42 @@ declare_class!(
         //
         // See https://github.com/rust-windowing/winit/pull/1490 for history.
 
-        #[method(mouseDown:)]
+        #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             trace_scope!("mouseDown:");
             self.mouse_motion(event);
             self.mouse_click(event, ElementState::Pressed);
         }
 
-        #[method(mouseUp:)]
+        #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
             trace_scope!("mouseUp:");
             self.mouse_motion(event);
             self.mouse_click(event, ElementState::Released);
         }
 
-        #[method(rightMouseDown:)]
+        #[unsafe(method(rightMouseDown:))]
         fn right_mouse_down(&self, event: &NSEvent) {
             trace_scope!("rightMouseDown:");
             self.mouse_motion(event);
             self.mouse_click(event, ElementState::Pressed);
         }
 
-        #[method(rightMouseUp:)]
+        #[unsafe(method(rightMouseUp:))]
         fn right_mouse_up(&self, event: &NSEvent) {
             trace_scope!("rightMouseUp:");
             self.mouse_motion(event);
             self.mouse_click(event, ElementState::Released);
         }
 
-        #[method(otherMouseDown:)]
+        #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &NSEvent) {
             trace_scope!("otherMouseDown:");
             self.mouse_motion(event);
             self.mouse_click(event, ElementState::Pressed);
         }
 
-        #[method(otherMouseUp:)]
+        #[unsafe(method(otherMouseUp:))]
         fn other_mouse_up(&self, event: &NSEvent) {
             trace_scope!("otherMouseUp:");
             self.mouse_motion(event);
@@ -622,27 +615,27 @@ declare_class!(
 
         // No tracing on these because that would be overly verbose
 
-        #[method(mouseMoved:)]
+        #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
             self.mouse_motion(event);
         }
 
-        #[method(mouseDragged:)]
+        #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
             self.mouse_motion(event);
         }
 
-        #[method(rightMouseDragged:)]
+        #[unsafe(method(rightMouseDragged:))]
         fn right_mouse_dragged(&self, event: &NSEvent) {
             self.mouse_motion(event);
         }
 
-        #[method(otherMouseDragged:)]
+        #[unsafe(method(otherMouseDragged:))]
         fn other_mouse_dragged(&self, event: &NSEvent) {
             self.mouse_motion(event);
         }
 
-        #[method(mouseEntered:)]
+        #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, _event: &NSEvent) {
             trace_scope!("mouseEntered:");
             self.queue_event(WindowEvent::CursorEntered {
@@ -650,7 +643,7 @@ declare_class!(
             });
         }
 
-        #[method(mouseExited:)]
+        #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
             trace_scope!("mouseExited:");
 
@@ -659,15 +652,15 @@ declare_class!(
             });
         }
 
-        #[method(scrollWheel:)]
+        #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
             trace_scope!("scrollWheel:");
 
             self.mouse_motion(event);
 
             let delta = {
-                let (x, y) = unsafe { (event.scrollingDeltaX(), event.scrollingDeltaY()) };
-                if unsafe { event.hasPreciseScrollingDeltas() } {
+                let (x, y) = (event.scrollingDeltaX(), event.scrollingDeltaY());
+                if event.hasPreciseScrollingDeltas() {
                     let delta = LogicalPosition::new(x, y).to_physical(self.scale_factor());
                     MouseScrollDelta::PixelDelta(delta)
                 } else {
@@ -680,10 +673,10 @@ declare_class!(
             // phase is recorded (or rather, the started/ended cases of the momentum phase) then we
             // report the touch phase.
             #[allow(non_upper_case_globals)]
-            let phase = match unsafe { event.momentumPhase() } {
+            let phase = match event.momentumPhase() {
                 NSEventPhase::MayBegin | NSEventPhase::Began => TouchPhase::Started,
                 NSEventPhase::Ended | NSEventPhase::Cancelled => TouchPhase::Ended,
-                _ => match unsafe { event.phase() } {
+                _ => match event.phase() {
                     NSEventPhase::MayBegin | NSEventPhase::Began => TouchPhase::Started,
                     NSEventPhase::Ended | NSEventPhase::Cancelled => TouchPhase::Ended,
                     _ => TouchPhase::Moved,
@@ -700,14 +693,14 @@ declare_class!(
             });
         }
 
-        #[method(magnifyWithEvent:)]
+        #[unsafe(method(magnifyWithEvent:))]
         fn magnify_with_event(&self, event: &NSEvent) {
             trace_scope!("magnifyWithEvent:");
 
             self.mouse_motion(event);
 
             #[allow(non_upper_case_globals)]
-            let phase = match unsafe { event.phase() } {
+            let phase = match event.phase() {
                 NSEventPhase::Began => TouchPhase::Started,
                 NSEventPhase::Changed => TouchPhase::Moved,
                 NSEventPhase::Cancelled => TouchPhase::Cancelled,
@@ -717,12 +710,12 @@ declare_class!(
 
             self.queue_event(WindowEvent::PinchGesture {
                 device_id: DEVICE_ID,
-                delta: unsafe { event.magnification() },
+                delta: event.magnification(),
                 phase,
             });
         }
 
-        #[method(smartMagnifyWithEvent:)]
+        #[unsafe(method(smartMagnifyWithEvent:))]
         fn smart_magnify_with_event(&self, event: &NSEvent) {
             trace_scope!("smartMagnifyWithEvent:");
 
@@ -733,14 +726,14 @@ declare_class!(
             });
         }
 
-        #[method(rotateWithEvent:)]
+        #[unsafe(method(rotateWithEvent:))]
         fn rotate_with_event(&self, event: &NSEvent) {
             trace_scope!("rotateWithEvent:");
 
             self.mouse_motion(event);
 
             #[allow(non_upper_case_globals)]
-            let phase = match unsafe { event.phase() } {
+            let phase = match event.phase() {
                 NSEventPhase::Began => TouchPhase::Started,
                 NSEventPhase::Changed => TouchPhase::Moved,
                 NSEventPhase::Cancelled => TouchPhase::Cancelled,
@@ -750,32 +743,32 @@ declare_class!(
 
             self.queue_event(WindowEvent::RotationGesture {
                 device_id: DEVICE_ID,
-                delta: unsafe { event.rotation() },
+                delta: event.rotation(),
                 phase,
             });
         }
 
-        #[method(pressureChangeWithEvent:)]
+        #[unsafe(method(pressureChangeWithEvent:))]
         fn pressure_change_with_event(&self, event: &NSEvent) {
             trace_scope!("pressureChangeWithEvent:");
 
             self.queue_event(WindowEvent::TouchpadPressure {
                 device_id: DEVICE_ID,
-                pressure: unsafe { event.pressure() },
-                stage: unsafe { event.stage() } as i64,
+                pressure: event.pressure(),
+                stage: event.stage() as i64,
             });
         }
 
         // Allows us to receive Ctrl-Tab and Ctrl-Esc.
         // Note that this *doesn't* help with any missing Cmd inputs.
         // https://github.com/chromium/chromium/blob/a86a8a6bcfa438fa3ac2eba6f02b3ad1f8e0756f/ui/views/cocoa/bridged_content_view.mm#L816
-        #[method(_wantsKeyDownForEvent:)]
+        #[unsafe(method(_wantsKeyDownForEvent:))]
         fn wants_key_down_for_event(&self, _event: &NSEvent) -> bool {
             trace_scope!("_wantsKeyDownForEvent:");
             true
         }
 
-        #[method(acceptsFirstMouse:)]
+        #[unsafe(method(acceptsFirstMouse:))]
         fn accepts_first_mouse(&self, _event: &NSEvent) -> bool {
             trace_scope!("acceptsFirstMouse:");
             self.ivars().accepts_first_mouse
@@ -805,13 +798,13 @@ impl WinitView {
             forward_key_to_app: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
-            _ns_window: WeakId::new(&window.retain()),
+            _ns_window: Weak::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
         });
-        let this: Retained<Self> = unsafe { msg_send_id![super(this), init] };
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
         this.setPostsFrameChangedNotifications(true);
-        let notification_center = unsafe { NSNotificationCenter::defaultCenter() };
+        let notification_center = NSNotificationCenter::defaultCenter();
         unsafe {
             notification_center.addObserver_selector_name_object(
                 &this,
@@ -831,7 +824,7 @@ impl WinitView {
         // That only returns a window _after_ the view has been attached though!
         // (which is incompatible with `frameDidChange:`)
         //
-        // unsafe { msg_send_id![self, window] }
+        // unsafe { msg_send![self, window] }
         self.ivars()._ns_window.load().expect("view to have a window")
     }
 
@@ -935,8 +928,8 @@ impl WinitView {
         // later will work though, since the flags are attached to the event and contain valid
         // information.
         'send_event: {
-            if is_flags_changed_event && unsafe { ns_event.keyCode() } != 0 {
-                let scancode = unsafe { ns_event.keyCode() };
+            if is_flags_changed_event && ns_event.keyCode() != 0 {
+                let scancode = ns_event.keyCode();
                 let physical_key = scancode_to_physicalkey(scancode as u32);
 
                 let logical_key = code_to_key(physical_key, scancode);
@@ -1059,7 +1052,7 @@ impl WinitView {
     }
 
     fn mouse_motion(&self, event: &NSEvent) {
-        let window_point = unsafe { event.locationInWindow() };
+        let window_point = event.locationInWindow();
         let view_point = self.convertPoint_fromView(window_point, None);
         let frame = self.frame();
 
@@ -1068,7 +1061,7 @@ impl WinitView {
             || view_point.x > frame.size.width
             || view_point.y > frame.size.height
         {
-            let mouse_buttons_down = unsafe { NSEvent::pressedMouseButtons() };
+            let mouse_buttons_down = NSEvent::pressedMouseButtons();
             if mouse_buttons_down == 0 {
                 // Point is outside of the client area (view) and no buttons are pressed
                 return;
@@ -1093,7 +1086,7 @@ fn mouse_button(event: &NSEvent) -> MouseButton {
     // For the other events, it's always set to 0.
     // MacOS only defines the left, right and middle buttons, 3..=31 are left as generic buttons,
     // but 3 and 4 are very commonly used as Back and Forward by hardware vendors and applications.
-    match unsafe { event.buttonNumber() } {
+    match event.buttonNumber() {
         0 => MouseButton::Left,
         1 => MouseButton::Right,
         2 => MouseButton::Middle,
@@ -1117,12 +1110,10 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
         && !ev_mods.super_key();
 
     if ignore_alt_characters {
-        let ns_chars = unsafe {
-            event.charactersIgnoringModifiers().expect("expected characters to be non-null")
-        };
+        let ns_chars =
+            event.charactersIgnoringModifiers().expect("expected characters to be non-null");
 
-        unsafe {
-            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
                 event.r#type(),
                 event.locationInWindow(),
                 event.modifierFlags(),
@@ -1135,7 +1126,6 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
                 event.keyCode(),
             )
             .unwrap()
-        }
     } else {
         event.copy()
     }

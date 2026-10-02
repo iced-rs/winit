@@ -15,10 +15,10 @@ use core_foundation::runloop::{
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, sel};
+use objc2::{msg_send, sel, ClassType};
+use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    CGRect, CGSize, MainThreadMarker, NSInteger, NSObjectProtocol, NSOperatingSystemVersion,
-    NSProcessInfo,
+    MainThreadMarker, NSInteger, NSObjectProtocol, NSOperatingSystemVersion, NSProcessInfo,
 };
 use objc2_ui_kit::{UIApplication, UICoordinateSpace, UIView, UIWindow};
 
@@ -671,10 +671,10 @@ pub(crate) fn send_occluded_event_for_all_windows(application: &UIApplication, o
     let mut events = Vec::new();
     #[allow(deprecated)]
     for window in application.windows().iter() {
-        if window.is_kind_of::<WinitUIWindow>() {
+        if window.isKindOfClass(WinitUIWindow::class()) {
             // SAFETY: We just checked that the window is a `winit` window
             let window = unsafe {
-                let ptr: *const UIWindow = window;
+                let ptr: *const UIWindow = &*window;
                 let ptr: *const WinitUIWindow = ptr.cast();
                 &*ptr
             };
@@ -727,10 +727,10 @@ pub(crate) fn terminated(application: &UIApplication) {
     let mut events = Vec::new();
     #[allow(deprecated)]
     for window in application.windows().iter() {
-        if window.is_kind_of::<WinitUIWindow>() {
+        if window.isKindOfClass(WinitUIWindow::class()) {
             // SAFETY: We just checked that the window is a `winit` window
             let window = unsafe {
-                let ptr: *const UIWindow = window;
+                let ptr: *const UIWindow = &*window;
                 let ptr: *const WinitUIWindow = ptr.cast();
                 &*ptr
             };

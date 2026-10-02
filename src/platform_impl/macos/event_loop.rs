@@ -296,7 +296,7 @@ impl<T> EventLoop<T> {
                 }
 
                 // SAFETY: We do not run the application re-entrantly
-                unsafe { self.app.run() };
+                self.app.run();
 
                 // While the app is running it's possible that we catch a panic
                 // to avoid unwinding across an objective-c ffi boundary, which
@@ -329,7 +329,7 @@ impl<T> EventLoop<T> {
 
                     self.delegate.set_stop_on_launch();
                     // SAFETY: We do not run the application re-entrantly
-                    unsafe { self.app.run() };
+                    self.app.run();
 
                     // Note: we dispatch `NewEvents(Init)` + `Resumed` events after the application
                     // has launched
@@ -362,7 +362,7 @@ impl<T> EventLoop<T> {
                     }
                     self.delegate.set_stop_on_redraw(true);
                     // SAFETY: We do not run the application re-entrantly
-                    unsafe { self.app.run() };
+                    self.app.run();
                 }
 
                 // While the app is running it's possible that we catch a panic

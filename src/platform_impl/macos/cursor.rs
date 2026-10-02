@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{msg_send, msg_send_id, sel, ClassType};
+use objc2::{msg_send, sel, AnyThread, ClassType};
 use objc2_app_kit::{NSBitmapImageRep, NSCursor, NSDeviceRGBColorSpace, NSImage};
 use objc2_foundation::{
     ns_string, NSData, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSSize,
@@ -50,10 +50,8 @@ pub(crate) fn cursor_from_image(cursor: &CursorImage) -> Retained<NSCursor> {
     let bitmap_data = unsafe { slice::from_raw_parts_mut(bitmap.bitmapData(), cursor.rgba.len()) };
     bitmap_data.copy_from_slice(&cursor.rgba);
 
-    let image = unsafe {
-        NSImage::initWithSize(NSImage::alloc(), NSSize::new(width.into(), height.into()))
-    };
-    unsafe { image.addRepresentation(&bitmap) };
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(width.into(), height.into()));
+    image.addRepresentation(&bitmap);
 
     let hotspot = NSPoint::new(cursor.hotspot_x as f64, cursor.hotspot_y as f64);
 
@@ -67,7 +65,7 @@ pub(crate) fn default_cursor() -> Retained<NSCursor> {
 unsafe fn try_cursor_from_selector(sel: Sel) -> Option<Retained<NSCursor>> {
     let cls = NSCursor::class();
     if msg_send![cls, respondsToSelector: sel] {
-        let cursor: Retained<NSCursor> = unsafe { msg_send_id![cls, performSelector: sel] };
+        let cursor: Retained<NSCursor> = unsafe { msg_send![cls, performSelector: sel] };
         Some(cursor)
     } else {
         tracing::warn!("cursor `{sel}` appears to be invalid");
@@ -129,23 +127,23 @@ unsafe fn load_webkit_cursor(name: &NSString) -> Retained<NSCursor> {
     // TODO: Handle PLists better
     let info_path = cursor_path.stringByAppendingPathComponent(ns_string!("info.plist"));
     let info: Retained<NSDictionary<NSObject, NSObject>> = unsafe {
-        msg_send_id![
+        msg_send![
             <NSDictionary<NSObject, NSObject>>::class(),
             dictionaryWithContentsOfFile: &*info_path,
         ]
     };
     let mut x = 0.0;
-    if let Some(n) = info.get(&*ns_string!("hotx")) {
-        if n.is_kind_of::<NSNumber>() {
-            let ptr: *const NSObject = n;
+    if let Some(n) = info.objectForKey(&*ns_string!("hotx")) {
+        if n.isKindOfClass(NSNumber::class()) {
+            let ptr: *const NSObject = &*n;
             let ptr: *const NSNumber = ptr.cast();
             x = unsafe { &*ptr }.as_cgfloat()
         }
     }
     let mut y = 0.0;
-    if let Some(n) = info.get(&*ns_string!("hotx")) {
-        if n.is_kind_of::<NSNumber>() {
-            let ptr: *const NSObject = n;
+    if let Some(n) = info.objectForKey(&*ns_string!("hotx")) {
+        if n.isKindOfClass(NSNumber::class()) {
+            let ptr: *const NSObject = &*n;
             let ptr: *const NSNumber = ptr.cast();
             y = unsafe { &*ptr }.as_cgfloat()
         }
@@ -187,6 +185,7 @@ pub(crate) fn invisible_cursor() -> Retained<NSCursor> {
     CURSOR.get_or_init(|| CustomCursor(new_invisible())).0.clone()
 }
 
+#[allow(deprecated)]
 pub(crate) fn cursor_from_icon(icon: CursorIcon) -> Retained<NSCursor> {
     match icon {
         CursorIcon::Default => default_cursor(),

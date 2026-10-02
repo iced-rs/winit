@@ -5,9 +5,7 @@ use std::time::Instant;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{
-    class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass,
-};
+use objc2::{class, define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSRunningApplication,
 };
@@ -55,22 +53,16 @@ pub const kAEGetURL: u32 = 0x4755524c;
 #[allow(non_upper_case_globals)]
 pub const keyDirectObject: u32 = 0x2d2d2d2d;
 
-declare_class!(
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WinitApplicationDelegate"]
+    #[ivars = AppState]
     #[derive(Debug)]
     pub(super) struct ApplicationDelegate;
 
-    unsafe impl ClassType for ApplicationDelegate {
-        type Super = NSObject;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "WinitApplicationDelegate";
-    }
-
-    impl DeclaredClass for ApplicationDelegate {
-        type Ivars = AppState;
-    }
-
-    unsafe impl ApplicationDelegate {
-        #[method(handleUrl:withReplyEvent:)]
+    impl ApplicationDelegate {
+        #[unsafe(method(handleUrl:withReplyEvent:))]
         fn handle_url(&self, event: *mut AnyObject, _reply: *mut AnyObject) {
             if let Some(string) = parse_url(event) {
                 self.handle_event(Event::PlatformSpecific(PlatformSpecific::MacOS(
@@ -83,12 +75,12 @@ declare_class!(
     unsafe impl NSObjectProtocol for ApplicationDelegate {}
 
     unsafe impl NSApplicationDelegate for ApplicationDelegate {
-        #[method(applicationDidFinishLaunching:)]
+        #[unsafe(method(applicationDidFinishLaunching:))]
         fn app_did_finish_launching(&self, notification: &NSNotification) {
             self.did_finish_launching(notification)
         }
 
-        #[method(applicationWillFinishLaunching:)]
+        #[unsafe(method(applicationWillFinishLaunching:))]
         fn will_finish_launching(&self, _sender: Option<&AnyObject>) {
             trace_scope!("applicationWillFinishLaunching");
 
@@ -98,15 +90,15 @@ declare_class!(
                     msg_send![event_manager, sharedAppleEventManager];
 
                 let () = msg_send![shared_manager,
-                    setEventHandler: self
-                    andSelector: sel!(handleUrl:withReplyEvent:)
-                    forEventClass: kInternetEventClass
-                    andEventID: kAEGetURL
+                    setEventHandler: self,
+                    andSelector: sel!(handleUrl:withReplyEvent:),
+                    forEventClass: kInternetEventClass,
+                    andEventID: kAEGetURL,
                 ];
             }
         }
 
-        #[method(applicationWillTerminate:)]
+        #[unsafe(method(applicationWillTerminate:))]
         fn app_will_terminate(&self, notification: &NSNotification) {
             self.will_terminate(notification)
         }
@@ -139,7 +131,7 @@ impl ApplicationDelegate {
             wait_timeout: Cell::new(None),
             pending_redraw: RefCell::new(vec![]),
         });
-        unsafe { msg_send_id![super(this), init] }
+        unsafe { msg_send![super(this), init] }
     }
 
     // NOTE: This will, globally, only be run once, no matter how many
@@ -166,7 +158,7 @@ impl ApplicationDelegate {
             // - https://github.com/rust-windowing/winit/issues/261
             // - https://github.com/rust-windowing/winit/issues/3958
             let is_bundled =
-                unsafe { NSRunningApplication::currentApplication().bundleIdentifier().is_some() };
+                NSRunningApplication::currentApplication().bundleIdentifier().is_some();
             if !is_bundled {
                 app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             }
@@ -213,11 +205,10 @@ impl ApplicationDelegate {
 
     pub fn get(mtm: MainThreadMarker) -> Retained<Self> {
         let app = NSApplication::sharedApplication(mtm);
-        let delegate =
-            unsafe { app.delegate() }.expect("a delegate was not configured on the application");
-        if delegate.is_kind_of::<Self>() {
+        let delegate = app.delegate().expect("a delegate was not configured on the application");
+        if delegate.isKindOfClass(Self::class()) {
             // SAFETY: Just checked that the delegate is an instance of `ApplicationDelegate`
-            unsafe { Retained::cast(delegate) }
+            unsafe { Retained::cast_unchecked(delegate) }
         } else {
             panic!("tried to get a delegate that was not the one Winit has registered")
         }

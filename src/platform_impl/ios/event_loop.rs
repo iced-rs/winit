@@ -12,8 +12,9 @@ use core_foundation::runloop::{
     CFRunLoopSourceInvalidate, CFRunLoopSourceRef, CFRunLoopSourceSignal, CFRunLoopWakeUp,
 };
 use objc2::rc::Retained;
-use objc2::{msg_send_id, ClassType};
+use objc2::{msg_send, ClassType};
 use objc2_foundation::{MainThreadMarker, NSNotificationCenter, NSObject};
+#[allow(deprecated)]
 use objc2_ui_kit::{
     UIApplication, UIApplicationDidBecomeActiveNotification,
     UIApplicationDidEnterBackgroundNotification, UIApplicationDidFinishLaunchingNotification,
@@ -176,7 +177,7 @@ impl<T: 'static> EventLoop<T> {
         // this line sets up the main run loop before `UIApplicationMain`
         setup_control_flow_observers();
 
-        let center = unsafe { NSNotificationCenter::defaultCenter() };
+        let center = NSNotificationCenter::defaultCenter();
 
         let _did_finish_launching_observer = create_observer(
             &center,
@@ -207,12 +208,12 @@ impl<T: 'static> EventLoop<T> {
             // `applicationWillEnterForeground:`
             unsafe { UIApplicationWillEnterForegroundNotification },
             move |notification| {
-                let app = unsafe { notification.object() }.expect(
+                let app = notification.object().expect(
                     "UIApplicationWillEnterForegroundNotification to have application object",
                 );
                 // SAFETY: The `object` in `UIApplicationWillEnterForegroundNotification` is
                 // documented to be `UIApplication`.
-                let app: Retained<UIApplication> = unsafe { Retained::cast(app) };
+                let app: Retained<UIApplication> = unsafe { Retained::cast_unchecked(app) };
                 send_occluded_event_for_all_windows(&app, false);
             },
         );
@@ -221,12 +222,12 @@ impl<T: 'static> EventLoop<T> {
             // `applicationDidEnterBackground:`
             unsafe { UIApplicationDidEnterBackgroundNotification },
             move |notification| {
-                let app = unsafe { notification.object() }.expect(
+                let app = notification.object().expect(
                     "UIApplicationDidEnterBackgroundNotification to have application object",
                 );
                 // SAFETY: The `object` in `UIApplicationDidEnterBackgroundNotification` is
                 // documented to be `UIApplication`.
-                let app: Retained<UIApplication> = unsafe { Retained::cast(app) };
+                let app: Retained<UIApplication> = unsafe { Retained::cast_unchecked(app) };
                 send_occluded_event_for_all_windows(&app, true);
             },
         );
@@ -235,11 +236,12 @@ impl<T: 'static> EventLoop<T> {
             // `applicationWillTerminate:`
             unsafe { UIApplicationWillTerminateNotification },
             move |notification| {
-                let app = unsafe { notification.object() }
+                let app = notification
+                    .object()
                     .expect("UIApplicationWillTerminateNotification to have application object");
                 // SAFETY: The `object` in `UIApplicationWillTerminateNotification` is
                 // (somewhat) documented to be `UIApplication`.
-                let app: Retained<UIApplication> = unsafe { Retained::cast(app) };
+                let app: Retained<UIApplication> = unsafe { Retained::cast_unchecked(app) };
                 app_state::terminated(&app);
             },
         );
@@ -275,7 +277,7 @@ impl<T: 'static> EventLoop<T> {
         F: FnMut(Event<T>, &RootActiveEventLoop),
     {
         let application: Option<Retained<UIApplication>> =
-            unsafe { msg_send_id![UIApplication::class(), sharedApplication] };
+            unsafe { msg_send![UIApplication::class(), sharedApplication] };
         assert!(
             application.is_none(),
             "\
@@ -302,6 +304,9 @@ impl<T: 'static> EventLoop<T> {
             fn _NSGetArgv() -> *mut *mut *mut c_char;
         }
 
+        // `UIApplicationMain` is the only externally-callable entry point
+        // (`UIApplication::__main` is `pub(crate)`), so the deprecated alias is used.
+        #[allow(deprecated)]
         unsafe {
             UIApplicationMain(
                 *_NSGetArgc(),

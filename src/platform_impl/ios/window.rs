@@ -2,12 +2,12 @@
 
 use std::collections::VecDeque;
 
+use dispatch2::MainThreadBound;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
-use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
-use objc2_foundation::{
-    CGFloat, CGPoint, CGRect, CGSize, MainThreadBound, MainThreadMarker, NSObjectProtocol,
-};
+use objc2::{class, define_class, msg_send, MainThreadOnly};
+use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
+use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
 use objc2_ui_kit::{
     UIApplication, UICoordinateSpace, UIResponder, UIScreen, UIScreenOverscanCompensation,
     UIViewController, UIWindow,
@@ -31,21 +31,15 @@ use crate::window::{
     WindowButtons, WindowId as RootWindowId, WindowLevel,
 };
 
-declare_class!(
+define_class!(
+    #[unsafe(super(UIWindow, UIResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WinitUIWindow"]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub(crate) struct WinitUIWindow;
 
-    unsafe impl ClassType for WinitUIWindow {
-        #[inherits(UIResponder, NSObject)]
-        type Super = UIWindow;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "WinitUIWindow";
-    }
-
-    impl DeclaredClass for WinitUIWindow {}
-
-    unsafe impl WinitUIWindow {
-        #[method(becomeKeyWindow)]
+    impl WinitUIWindow {
+        #[unsafe(method(becomeKeyWindow))]
         fn become_key_window(&self) {
             let mtm = MainThreadMarker::new().unwrap();
             app_state::handle_nonuser_event(
@@ -58,7 +52,7 @@ declare_class!(
             let _: () = unsafe { msg_send![super(self), becomeKeyWindow] };
         }
 
-        #[method(resignKeyWindow)]
+        #[unsafe(method(resignKeyWindow))]
         fn resign_key_window(&self) {
             let mtm = MainThreadMarker::new().unwrap();
             app_state::handle_nonuser_event(
@@ -80,7 +74,7 @@ impl WinitUIWindow {
         frame: CGRect,
         view_controller: &UIViewController,
     ) -> Retained<Self> {
-        let this: Retained<Self> = unsafe { msg_send_id![mtm.alloc(), initWithFrame: frame] };
+        let this: Retained<Self> = unsafe { msg_send![mtm.alloc(), initWithFrame: frame] };
 
         this.setRootViewController(Some(view_controller));
 
@@ -373,11 +367,11 @@ impl Inner {
     /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
     pub fn set_ime_allowed(&self, allowed: bool) {
         if allowed {
-            unsafe {
+            {
                 self.view.becomeFirstResponder();
             }
         } else {
-            unsafe {
+            {
                 self.view.resignFirstResponder();
             }
         }
