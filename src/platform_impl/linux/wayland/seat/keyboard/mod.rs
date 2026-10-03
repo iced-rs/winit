@@ -265,6 +265,16 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     RepeatInfo::Repeat { gap, delay }
                 };
             },
+            WlKeyboardEvent::Key { key, state: WEnum::Value(WlKeyState::Repeated), .. } => {
+                key_input(
+                    keyboard_state,
+                    &mut state.events_sink,
+                    data,
+                    key + 8,
+                    ElementState::Pressed,
+                    true,
+                );
+            },
             _ => unreachable!(),
         }
     }
