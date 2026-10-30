@@ -2307,8 +2307,12 @@ unsafe fn public_window_callback_inner(
                 }
             }
 
-            let new_outer_rect: RECT;
-            {
+            let new_outer_rect: RECT = if dragging_window {
+                // During a live drag, use the rect Windows suggests. The conservative rect below
+                // can land back on the monitor being left, which sends another WM_DPICHANGED and
+                // grows the window on every crossing (rust-windowing/winit#4341, #4694).
+                suggested_rect
+            } else {
                 let suggested_ul =
                     (suggested_rect.left + margin_left, suggested_rect.top + margin_top);
 
@@ -2351,7 +2355,7 @@ unsafe fn public_window_callback_inner(
                 let new_dpi_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONULL) };
                 let conservative_rect_monitor =
                     unsafe { MonitorFromRect(&conservative_rect, MONITOR_DEFAULTTONULL) };
-                new_outer_rect = if conservative_rect_monitor == new_dpi_monitor {
+                if conservative_rect_monitor == new_dpi_monitor {
                     conservative_rect
                 } else {
                     let get_monitor_rect = |monitor| {
@@ -2404,8 +2408,8 @@ unsafe fn public_window_callback_inner(
                     }
 
                     conservative_rect
-                };
-            }
+                }
+            };
 
             unsafe {
                 SetWindowPos(
